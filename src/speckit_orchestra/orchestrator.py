@@ -159,6 +159,7 @@ def _run_epic(root, feature: str, config: Config, doc, state, feature_dir, epic:
     artifacts = load_feature_artifacts(root, feature)
     all_tasks = parse_tasks(artifacts.tasks.read_text(encoding="utf-8"))
     validation_failure: str | None = None
+    validation_failure_evidence: list[str] = []
     general_max_attempts = max(1, config.execution.maxRetries + 1)
     validation_max_attempts = max(1, config.execution.validationRetries + 1)
     max_attempts = max(general_max_attempts, validation_max_attempts)
@@ -218,14 +219,20 @@ def _run_epic(root, feature: str, config: Config, doc, state, feature_dir, epic:
             return 1
 
         if not changed and not _allows_no_changes(epic):
-            blocker = _blocker(
-                "no_changes",
-                "Adapter completed but did not change any files.",
-                "Inspect stdout.log and rerun after clarifying the epic scope.",
+            blocker = _no_changes_blocker(root, attempt_dir, validation_failure, validation_failure_evidence)
+            _write_attempt_result(
+                attempt_dir,
+                epic,
+                attempt,
+                result.status,
+                result.exit_code,
+                changed,
+                validation_failure or "",
+                blocker,
             )
-            _write_attempt_result(attempt_dir, epic, attempt, result.status, result.exit_code, changed, "", blocker)
             if attempt < general_max_attempts:
                 validation_failure = blocker["message"]
+                validation_failure_evidence = list(blocker.get("evidence", []))
                 state["epics"][epic.id]["status"] = "retrying"
                 save_state(feature_dir, state)
                 continue
@@ -243,6 +250,7 @@ def _run_epic(root, feature: str, config: Config, doc, state, feature_dir, epic:
             _write_attempt_result(attempt_dir, epic, attempt, result.status, result.exit_code, changed, validation_summary, blocker)
             if attempt < validation_max_attempts:
                 validation_failure = validation_summary
+                validation_failure_evidence = list(blocker.get("evidence", []))
                 state["epics"][epic.id]["status"] = "retrying"
                 append_event(feature_dir, "epic.retrying", epicId=epic.id, attempt=attempt, category="validation_failed")
                 save_state(feature_dir, state)
@@ -441,6 +449,50 @@ def _format_paths(paths: list[str]) -> str:
 def _allows_no_changes(epic: Epic) -> bool:
     text = f"{epic.title} {epic.goal}".lower()
     return "manual" in text or "documentation" in text or "docs" in text
+
+
+def _no_changes_blocker(
+    root,
+    attempt_dir,
+    validation_failure: str | None = None,
+    validation_failure_evidence: list[str] | None = None,
+) -> dict[str, object]:
+    stdout_path = attempt_dir / "stdout.log"
+    stdout_evidence = relpath(stdout_path, root)
+    evidence = [*(validation_failure_evidence or []), stdout_evidence]
+    rationale = _stdout_rationale(stdout_path)
+    if validation_failure:
+        message = "Validation failed previously and the adapter completed this attempt without changing files."
+        if rationale:
+            message = f"{message} Adapter output: {rationale}"
+        return _blocker(
+            "validation_failed",
+            message,
+            "Inspect validation.log and stdout.log, clarify the failing requirement, then resume.",
+            evidence,
+        )
+
+    message = "Adapter completed but did not change any files."
+    if rationale:
+        message = f"{message} Adapter output: {rationale}"
+    return _blocker(
+        "no_changes",
+        message,
+        "Inspect stdout.log and rerun after clarifying the epic scope.",
+        [stdout_evidence],
+    )
+
+
+def _stdout_rationale(stdout_path) -> str | None:
+    if not stdout_path.exists():
+        return None
+    lines = [line.strip() for line in stdout_path.read_text(encoding="utf-8", errors="replace").splitlines()]
+    lines = [line for line in lines if line]
+    if not lines:
+        return None
+    selected = lines[-3:]
+    text = " ".join(selected)
+    return text[:500]
 
 
 def _write_attempt_result(attempt_dir, epic, attempt, adapter_status, exit_code, changed, validation_summary, blocker) -> None:
