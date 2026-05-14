@@ -1,6 +1,6 @@
 [project]
 name = "speckit-orchestra"
-version = "0.3.0"
+version = "0.4.0"
 description = "CLI-first orchestration for Spec Kit task execution through AI coding agent CLIs."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -9,6 +9,7 @@ authors = [{ name = "Lee Kubicek" }]
 dependencies = [
   "pydantic>=2.8",
   "PyYAML>=6.0",
+  "rich>=13.7",
 ]
 
 [project.scripts]

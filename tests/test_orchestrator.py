@@ -3,7 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from speckit_orchestra.config import default_config
-from speckit_orchestra.orchestrator import _changed_paths_since_status, _dirty_paths_for_run_preflight
+from speckit_orchestra.orchestrator import (
+    _changed_paths_since_snapshot,
+    _changed_paths_since_status,
+    _dirty_paths_for_run_preflight,
+    _snapshot_status_paths,
+)
 
 
 def test_attempt_changes_ignore_baseline_and_runtime_artifacts(tmp_path: Path) -> None:
@@ -40,3 +45,27 @@ def test_run_preflight_ignores_orchestra_project_artifacts(tmp_path: Path, monke
     )
 
     assert _dirty_paths_for_run_preflight(tmp_path, config) == ["README.md"]
+
+
+def test_attempt_changes_detect_modified_already_dirty_file(tmp_path: Path) -> None:
+    config = default_config(tmp_path)
+    app = tmp_path / "src" / "App.tsx"
+    app.parent.mkdir(parents=True)
+    app.write_text("before\n", encoding="utf-8")
+    status = " M src/App.tsx\n"
+    snapshot = _snapshot_status_paths(tmp_path, config, "001-demo", status)
+
+    app.write_text("after\n", encoding="utf-8")
+
+    assert _changed_paths_since_snapshot(tmp_path, snapshot, status, config, "001-demo") == ["src/App.tsx"]
+
+
+def test_attempt_changes_ignore_unchanged_already_dirty_file(tmp_path: Path) -> None:
+    config = default_config(tmp_path)
+    app = tmp_path / "src" / "App.tsx"
+    app.parent.mkdir(parents=True)
+    app.write_text("same\n", encoding="utf-8")
+    status = " M src/App.tsx\n"
+    snapshot = _snapshot_status_paths(tmp_path, config, "001-demo", status)
+
+    assert _changed_paths_since_snapshot(tmp_path, snapshot, status, config, "001-demo") == []

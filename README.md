@@ -12,7 +12,7 @@ The MVP ships with an `opencode` CLI adapter and keeps the orchestration core ha
 - Execute epics sequentially with one fresh adapter subprocess per attempt.
 - Capture prompts, stdout, stderr, exit metadata, changed files, diffs, validation logs, and result reports.
 - Enforce forbidden-path and allowed-scope checks.
-- Retry validation failures once by default.
+- Retry validation failures through a separate configurable validation retry budget.
 - Maintain atomic `state.json`, append-only `events.jsonl`, lock files, and summary reports.
 - Support commit modes: `ask`, `auto`, and `never`.
 - Migrate initialized project artifacts after CLI upgrades with `sko migrate`.
@@ -232,12 +232,15 @@ Useful options:
 
 - `--allow-dirty` skips the clean-worktree preflight.
 - `--max-retries <n>` overrides retry count.
+- `--validation-retries <n>` overrides the retry count for failing validation/test commands.
 - `--no-tests` skips validation commands.
 - `--global-validation` also runs configured global validation commands.
 - `--continue-on-blocker` continues independent epics where possible.
 - `--force-unlock` clears a stale feature lock.
 
-`run` ignores project-local `.spec-orchestra/` setup files during the clean-worktree preflight, and it scope-checks/commits only files newly changed by the current adapter attempt. Runtime artifacts under `.spec-orchestra/features/<feature-id>/runs/`, `reports/`, `state.json`, `events.jsonl`, and `lock.json` are never treated as user implementation changes.
+`run` ignores project-local `.spec-orchestra/` setup files during the clean-worktree preflight, and it scope-checks/commits only files changed by the current adapter attempt. Retries compare file fingerprints, so edits to already-dirty files from a previous failed attempt are still detected. Runtime artifacts under `.spec-orchestra/features/<feature-id>/runs/`, `reports/`, `state.json`, `events.jsonl`, and `lock.json` are never treated as user implementation changes.
+
+Interactive terminals show a lightweight spinner for the active epic. Progress messages include selected-target position, for example `Working on 2/8: EPIC-002 ...` and `Completed 2/8: EPIC-002 ...`.
 
 `run --dry-run` marks epics that require manual approval so non-interactive runs can be prepared before execution.
 
@@ -309,6 +312,16 @@ opencode run --model openai/gpt-5.5 --variant high --agent build
 You can still use `agent.args` as an escape hatch. If `agent.args` already contains `--model`, `--variant`, or `--agent`, the adapter does not add duplicate flags.
 
 Keep these settings outside the prompt. Prompt text can request behavior, but provider routing, model selection, reasoning effort, and agent choice are runtime invocation settings and should be configured explicitly.
+
+Execution retry settings live under `execution`:
+
+```yaml
+execution:
+  maxRetries: 1
+  validationRetries: 5
+```
+
+`maxRetries` controls generic retryable blockers such as no-change attempts. `validationRetries` controls retries after configured validation/test commands fail, which is useful for overnight runs where the agent should keep iterating on failing tests before blocking.
 
 ### `adapters`
 

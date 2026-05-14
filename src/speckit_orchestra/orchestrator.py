@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
 import shlex
 import subprocess
@@ -17,6 +18,7 @@ from .locks import LockError, acquire_lock, release_lock
 from .prompts import dependency_summary_for, render_attempt_report, render_epic_prompt
 from .reporting import write_summary_report
 from .state import append_event, load_state, mark_feature_running, reset_blocked_for_resume, save_state
+from .ui import progress_label, progress_spinner
 from .utils import atomic_write_json, atomic_write_text, now_iso, relpath
 from .validation import epics_path, feature_state_dir, topological_epics, validate_feature
 
@@ -30,6 +32,7 @@ class RunOptions:
     no_tests: bool = False
     global_validation: bool = False
     max_retries: int | None = None
+    validation_retries: int | None = None
     commit_mode: str | None = None
     agent: str | None = None
     mode: str | None = None
@@ -46,6 +49,8 @@ def run_feature(root, feature: str, config: Config, options: RunOptions) -> int:
         config.agent.mode = options.mode
     if options.max_retries is not None:
         config.execution.maxRetries = options.max_retries
+    if options.validation_retries is not None:
+        config.execution.validationRetries = options.validation_retries
     if options.commit_mode:
         config.commit.mode = options.commit_mode
     if options.continue_on_blocker:
@@ -136,7 +141,8 @@ def _run_loop(root, feature: str, config: Config, doc, state, feature_dir, optio
                 return 1
             continue
 
-        status = _run_epic(root, feature, config, doc, state, feature_dir, epic, options)
+        position = targets.index(epic_id) + 1
+        status = _run_epic(root, feature, config, doc, state, feature_dir, epic, options, position, len(targets))
         if status == 0:
             continue
         if config.execution.continueOnBlocker:
@@ -144,7 +150,7 @@ def _run_loop(root, feature: str, config: Config, doc, state, feature_dir, optio
         return status
 
 
-def _run_epic(root, feature: str, config: Config, doc, state, feature_dir, epic: Epic, options: RunOptions) -> int:
+def _run_epic(root, feature: str, config: Config, doc, state, feature_dir, epic: Epic, options: RunOptions, position: int, total: int) -> int:
     adapter = get_adapter(config.agent.adapter)
     if adapter is None:
         _mark_blocked(state, feature_dir, epic.id, "agent_error", f"unknown adapter {config.agent.adapter}")
@@ -153,10 +159,13 @@ def _run_epic(root, feature: str, config: Config, doc, state, feature_dir, epic:
     artifacts = load_feature_artifacts(root, feature)
     all_tasks = parse_tasks(artifacts.tasks.read_text(encoding="utf-8"))
     validation_failure: str | None = None
-    max_attempts = max(1, config.execution.maxRetries + 1)
+    general_max_attempts = max(1, config.execution.maxRetries + 1)
+    validation_max_attempts = max(1, config.execution.validationRetries + 1)
+    max_attempts = max(general_max_attempts, validation_max_attempts)
 
     while state["epics"][epic.id].get("attempts", 0) < max_attempts:
         attempt = int(state["epics"][epic.id].get("attempts", 0)) + 1
+        print(progress_label("Working on", position, total, epic.id, epic.title) + f" (attempt {attempt}/{max_attempts})")
         state["currentEpic"] = epic.id
         state["epics"][epic.id]["status"] = "running"
         state["epics"][epic.id]["attempts"] = attempt
@@ -177,8 +186,10 @@ def _run_epic(root, feature: str, config: Config, doc, state, feature_dir, epic:
 
         before_head = git.head(root)
         before_status = git.status_porcelain(root)
+        before_snapshot = _snapshot_status_paths(root, config, doc.feature.id, before_status)
         invocation = adapter.build_invocation(config, root, prompt)
-        result = adapter.run(invocation, attempt_dir / "stdout.log", attempt_dir / "stderr.log")
+        with progress_spinner(progress_label("Working on", position, total, epic.id, epic.title)):
+            result = adapter.run(invocation, attempt_dir / "stdout.log", attempt_dir / "stderr.log")
         atomic_write_json(
             attempt_dir / "exit.json",
             {
@@ -196,7 +207,7 @@ def _run_epic(root, feature: str, config: Config, doc, state, feature_dir, epic:
             _mark_blocked_from_result(state, feature_dir, epic.id, result.blocker or _blocker("agent_error", result.summary))
             return 3
 
-        changed = _attempt_changed_files(root, config, doc.feature.id, before_status)
+        changed = _attempt_changed_files(root, config, doc.feature.id, before_snapshot)
         atomic_write_text(attempt_dir / "changed-files.txt", "\n".join(changed) + ("\n" if changed else ""))
         atomic_write_text(attempt_dir / "diff.patch", git.diff_patch(root))
 
@@ -213,7 +224,7 @@ def _run_epic(root, feature: str, config: Config, doc, state, feature_dir, epic:
                 "Inspect stdout.log and rerun after clarifying the epic scope.",
             )
             _write_attempt_result(attempt_dir, epic, attempt, result.status, result.exit_code, changed, "", blocker)
-            if attempt < max_attempts:
+            if attempt < general_max_attempts:
                 validation_failure = blocker["message"]
                 state["epics"][epic.id]["status"] = "retrying"
                 save_state(feature_dir, state)
@@ -230,7 +241,7 @@ def _run_epic(root, feature: str, config: Config, doc, state, feature_dir, epic:
                 [relpath(attempt_dir / "validation.log", root)],
             )
             _write_attempt_result(attempt_dir, epic, attempt, result.status, result.exit_code, changed, validation_summary, blocker)
-            if attempt < max_attempts:
+            if attempt < validation_max_attempts:
                 validation_failure = validation_summary
                 state["epics"][epic.id]["status"] = "retrying"
                 append_event(feature_dir, "epic.retrying", epicId=epic.id, attempt=attempt, category="validation_failed")
@@ -250,7 +261,7 @@ def _run_epic(root, feature: str, config: Config, doc, state, feature_dir, epic:
         save_state(feature_dir, state)
         append_event(feature_dir, "epic.completed", epicId=epic.id, attempt=attempt)
         _write_attempt_result(attempt_dir, epic, attempt, result.status, result.exit_code, changed, validation_summary, None)
-        print(f"Completed {epic.id}: {epic.title}")
+        print(progress_label("Completed", position, total, epic.id, epic.title))
         return 0
 
     blocker = _blocker("validation_failed", f"{epic.id} failed after {max_attempts} attempts.")
@@ -347,16 +358,49 @@ def _dirty_paths_for_run_preflight(root, config: Config) -> list[str]:
     return [path for path in git.changed_files(root) if not _is_orchestra_project_artifact(path, config)]
 
 
-def _attempt_changed_files(root, config: Config, feature_id: str, before_status: str) -> list[str]:
+def _attempt_changed_files(root, config: Config, feature_id: str, before_snapshot: dict[str, str | None]) -> list[str]:
     after_status = git.status_porcelain(root)
-    return _changed_paths_since_status(before_status, after_status, config, feature_id)
+    return _changed_paths_since_snapshot(root, before_snapshot, after_status, config, feature_id)
 
 
 def _changed_paths_since_status(before_status: str, after_status: str, config: Config, feature_id: str) -> list[str]:
-    before = _status_paths(before_status)
+    before_snapshot = {path: None for path in _status_paths(before_status)}
     after = _status_paths(after_status)
-    changed = sorted(after - before)
+    changed = sorted(after - set(before_snapshot))
     return [path for path in changed if not _is_orchestra_runtime_artifact(path, config, feature_id)]
+
+
+def _changed_paths_since_snapshot(root, before_snapshot: dict[str, str | None], after_status: str, config: Config, feature_id: str) -> list[str]:
+    after_paths = _status_paths(after_status)
+    candidates = sorted(after_paths | set(before_snapshot))
+    changed: list[str] = []
+    for path in candidates:
+        if _is_orchestra_runtime_artifact(path, config, feature_id):
+            continue
+        before = before_snapshot.get(path)
+        after = _file_fingerprint(root, path) if path in after_paths else None
+        if path not in before_snapshot or before != after:
+            changed.append(path)
+    return changed
+
+
+def _snapshot_status_paths(root, config: Config, feature_id: str, status: str) -> dict[str, str | None]:
+    snapshot: dict[str, str | None] = {}
+    for path in _status_paths(status):
+        if not _is_orchestra_runtime_artifact(path, config, feature_id):
+            snapshot[path] = _file_fingerprint(root, path)
+    return snapshot
+
+
+def _file_fingerprint(root, path: str) -> str | None:
+    file_path = root / path
+    if not file_path.is_file():
+        return None
+    digest = hashlib.sha256()
+    with file_path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _status_paths(status: str) -> set[str]:

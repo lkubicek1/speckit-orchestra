@@ -9,7 +9,7 @@ from . import __version__
 from .utils import read_yaml, write_yaml
 
 
-CONFIG_VERSION = 2
+CONFIG_VERSION = 3
 
 
 DEFAULT_COMMIT_TEMPLATE = """feat({featureId}): implement {epicId} {epicTitle}
@@ -57,6 +57,7 @@ class AutomationConfig(StrictModel):
 class ExecutionConfig(StrictModel):
     mode: Literal["sequential"] = "sequential"
     maxRetries: int = 1
+    validationRetries: int = 5
     continueOnBlocker: bool = False
     requireCleanGit: bool = True
     useWorktrees: bool = False

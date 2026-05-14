@@ -37,6 +37,18 @@ def test_run_still_accepts_feature_and_epic() -> None:
     assert args.epic == "EPIC-002"
 
 
+def test_run_accepts_validation_retries_override() -> None:
+    args = build_parser().parse_args(["run", "specs/001-demo", "--validation-retries", "7"])
+
+    assert args.validation_retries == 7
+
+
+def test_resume_accepts_validation_retries_override() -> None:
+    args = build_parser().parse_args(["resume", "specs/001-demo", "--validation-retries", "7"])
+
+    assert args.validation_retries == 7
+
+
 def test_version_and_update_switches_parse() -> None:
     parser = build_parser()
 

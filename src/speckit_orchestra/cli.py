@@ -110,6 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--allow-dirty", action="store_true")
     resume.add_argument("--no-tests", action="store_true")
     resume.add_argument("--max-retries", type=int)
+    resume.add_argument("--validation-retries", type=int)
     resume.add_argument("--commit", choices=["auto", "ask", "never"])
     resume.add_argument("--force-unlock", action="store_true")
     resume.set_defaults(func=cmd_resume)
@@ -153,6 +154,7 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--mode")
     parser.add_argument("--commit", choices=["auto", "ask", "never"])
     parser.add_argument("--max-retries", type=int)
+    parser.add_argument("--validation-retries", type=int)
     parser.add_argument("--only")
     parser.add_argument("--from", dest="from_epic")
     parser.add_argument("--dry-run", action="store_true")
@@ -275,6 +277,7 @@ def cmd_run(args, root: Path) -> int:
             no_tests=args.no_tests,
             global_validation=args.global_validation,
             max_retries=args.max_retries,
+            validation_retries=args.validation_retries,
             commit_mode=args.commit,
             agent=args.agent,
             mode=args.mode,
@@ -296,6 +299,7 @@ def cmd_resume(args, root: Path) -> int:
             allow_dirty=args.allow_dirty,
             no_tests=args.no_tests,
             max_retries=args.max_retries,
+            validation_retries=args.validation_retries,
             commit_mode=args.commit,
             force_unlock=args.force_unlock,
             resume=True,
