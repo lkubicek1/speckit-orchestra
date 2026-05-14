@@ -36,6 +36,11 @@ class AgentConfig(StrictModel):
     mode: str = "cli"
     command: str = "opencode"
     args: list[str] = Field(default_factory=lambda: ["run"])
+    provider: str | None = None
+    model: str | None = None
+    variant: str | None = None
+    opencodeAgent: str | None = None
+    thinking: bool = False
     promptInput: str = "stdin"
     outputFormat: str = "text"
     timeoutMs: int = 1_800_000
@@ -90,12 +95,27 @@ def default_config(
     mode: str = "cli",
     config_dir: str = ".spec-orchestra",
     commit_mode: str = "ask",
+    provider: str | None = None,
+    model: str | None = None,
+    variant: str | None = None,
+    opencode_agent: str | None = None,
+    thinking: bool = False,
 ) -> Config:
     command = agent
     args = ["run"] if agent == "opencode" else []
     return Config(
         project=ProjectConfig(name=root.name, orchestraRoot=config_dir),
-        agent=AgentConfig(adapter=agent, mode=mode, command=command, args=args),
+        agent=AgentConfig(
+            adapter=agent,
+            mode=mode,
+            command=command,
+            args=args,
+            provider=provider,
+            model=model,
+            variant=variant,
+            opencodeAgent=opencode_agent,
+            thinking=thinking,
+        ),
         automation=AutomationConfig(refineWithAgent=agent),
         commit=CommitConfig(mode=commit_mode),
     )

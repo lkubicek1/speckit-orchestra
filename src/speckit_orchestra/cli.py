@@ -12,6 +12,7 @@ from .adapters import ADAPTERS, get_adapter
 from .config import default_config, load_config, write_config
 from .epics import write_epics
 from .feature import load_feature_artifacts
+from .opencode_discovery import OpencodeDiscovery, discover_opencode
 from .orchestrator import RunOptions, run_feature
 from .refinement import generate_epic_document
 from .reporting import render_summary_report, write_summary_report
@@ -44,8 +45,25 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--config-dir", default=".spec-orchestra")
     init.add_argument("--commit-mode", choices=["auto", "ask", "never"], default="ask")
     init.add_argument("--run-mode", choices=["sequential"], default="sequential")
+    init.add_argument("--provider", help="Provider ID for opencode model selection, for example openai")
+    init.add_argument("--model", help="Model ID, either provider/model or model when --provider is set")
+    init.add_argument("--variant", help="Provider-specific reasoning variant, for example minimal, high, or max")
+    init.add_argument("--opencode-agent", help="opencode agent name to pass with --agent")
+    init.add_argument("--thinking", action="store_true", help="Pass --thinking to opencode run")
+    init.add_argument("--discover", action=argparse.BooleanOptionalAction, default=None, help="Discover local opencode providers/models/agents during init")
     init.add_argument("--yes", action="store_true", help="Accept defaults and overwrite prompts")
     init.set_defaults(func=cmd_init)
+
+    configure = sub.add_parser("configure", help="Update adapter runtime settings in .spec-orchestra/config.yaml")
+    configure.add_argument("--agent", default=None)
+    configure.add_argument("--mode", default=None)
+    configure.add_argument("--provider")
+    configure.add_argument("--model")
+    configure.add_argument("--variant")
+    configure.add_argument("--opencode-agent")
+    configure.add_argument("--thinking", action=argparse.BooleanOptionalAction, default=None)
+    configure.add_argument("--discover", action=argparse.BooleanOptionalAction, default=None, help="Discover local opencode providers/models/agents")
+    configure.set_defaults(func=cmd_configure)
 
     refine = sub.add_parser("refine", help="Generate epics.yaml from Spec Kit artifacts")
     refine.add_argument("feature")
@@ -111,12 +129,53 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
 
 
 def cmd_init(args, root: Path) -> int:
-    config = default_config(root, agent=args.agent, mode=args.mode, config_dir=args.config_dir, commit_mode=args.commit_mode)
+    config = default_config(
+        root,
+        agent=args.agent,
+        mode=args.mode,
+        config_dir=args.config_dir,
+        commit_mode=args.commit_mode,
+        provider=args.provider,
+        model=None,
+        variant=args.variant,
+        opencode_agent=args.opencode_agent,
+        thinking=args.thinking,
+    )
+    _set_model(config, args.model)
     config.execution.mode = args.run_mode
     path = root / args.config_dir / "config.yaml"
     if path.exists() and not args.yes:
         print(f"exists: {relpath(path, root)}")
         return 0
+    direct_agent_config = any([args.provider, args.model, args.variant, args.opencode_agent, args.thinking])
+    if _should_discover(args.discover, default=(not args.yes and not direct_agent_config), config=config):
+        _configure_opencode_interactive(config, root)
+    written = write_config(root, config)
+    print(relpath(written, root))
+    return 0
+
+
+def cmd_configure(args, root: Path) -> int:
+    config = load_config(root)
+    if args.agent:
+        config.agent.adapter = args.agent
+        config.agent.command = args.agent
+    if args.mode:
+        config.agent.mode = args.mode
+    if args.provider:
+        config.agent.provider = args.provider
+    if args.variant:
+        config.agent.variant = args.variant
+    if args.opencode_agent:
+        config.agent.opencodeAgent = args.opencode_agent
+    if args.thinking is not None:
+        config.agent.thinking = args.thinking
+    _set_model(config, args.model)
+    direct_agent_config = any(
+        [args.agent, args.mode, args.provider, args.model, args.variant, args.opencode_agent, args.thinking is not None]
+    )
+    if _should_discover(args.discover, default=(not direct_agent_config), config=config):
+        _configure_opencode_interactive(config, root)
     written = write_config(root, config)
     print(relpath(written, root))
     return 0
@@ -314,3 +373,135 @@ def _generic_doctor_checks(root: Path) -> list[dict[str, object]]:
         detail = "not found; only required if your adapter installation needs Node.js"
     checks.append({"name": "Node.js version", "ok": True, "detail": detail})
     return checks
+
+
+def _should_discover(value: bool | None, *, default: bool, config) -> bool:
+    if config.agent.adapter != "opencode":
+        return False
+    enabled = default if value is None else value
+    if enabled and not sys.stdin.isatty():
+        print("warning: opencode discovery requires an interactive terminal; skipping menu", file=sys.stderr)
+        return False
+    return enabled
+
+
+def _configure_opencode_interactive(config, root: Path) -> None:
+    print("\nopencode adapter setup")
+    discovery = discover_opencode(root, config.agent.command)
+    if not discovery.available:
+        print(f"Could not discover opencode: {'; '.join(discovery.errors)}")
+        _free_text_opencode_config(config)
+        return
+    for error in discovery.errors:
+        print(f"warning: {error}")
+
+    provider = _choose("Provider", _provider_choices(discovery), current=config.agent.provider)
+    if provider:
+        config.agent.provider = provider
+
+    model_choices = _model_choices(discovery, config.agent.provider)
+    model = _choose("Model", model_choices, current=_current_model(config), allow_custom=True)
+    if model:
+        _set_model(config, model)
+
+    variant = _choose(
+        "Reasoning / variant",
+        ["minimal", "low", "medium", "high", "max"],
+        current=config.agent.variant,
+        allow_custom=True,
+    )
+    if variant:
+        config.agent.variant = variant
+
+    agent = _choose("opencode agent", discovery.agents, current=config.agent.opencodeAgent, allow_custom=True)
+    if agent:
+        config.agent.opencodeAgent = agent
+
+    config.agent.thinking = _confirm("Show thinking blocks", default=config.agent.thinking)
+
+
+def _free_text_opencode_config(config) -> None:
+    provider = _prompt_text("Provider ID", config.agent.provider)
+    model = _prompt_text("Model", _current_model(config))
+    variant = _prompt_text("Reasoning / variant", config.agent.variant)
+    agent = _prompt_text("opencode agent", config.agent.opencodeAgent)
+    if provider:
+        config.agent.provider = provider
+    if model:
+        _set_model(config, model)
+    if variant:
+        config.agent.variant = variant
+    if agent:
+        config.agent.opencodeAgent = agent
+    config.agent.thinking = _confirm("Show thinking blocks", default=config.agent.thinking)
+
+
+def _provider_choices(discovery: OpencodeDiscovery) -> list[str]:
+    return sorted(discovery.providers)
+
+
+def _model_choices(discovery: OpencodeDiscovery, provider: str | None) -> list[str]:
+    if provider:
+        models = [model for model in discovery.models if model.startswith(f"{provider}/")]
+        if models:
+            return models
+    return discovery.models
+
+
+def _choose(label: str, choices: list[str], *, current: str | None = None, allow_custom: bool = False) -> str | None:
+    if not choices:
+        return _prompt_text(label, current) if allow_custom else current
+    print(f"\n{label}:")
+    for index, choice in enumerate(choices, start=1):
+        marker = " (current)" if choice == current else ""
+        print(f"  {index}. {choice}{marker}")
+    custom = " or type a custom value" if allow_custom else ""
+    prompt = f"Choose {label.lower()} [Enter to keep"
+    prompt += f" {current}" if current else " blank"
+    prompt += f", number{custom}]: "
+    value = input(prompt).strip()
+    if not value:
+        return current
+    if value.isdigit():
+        index = int(value)
+        if 1 <= index <= len(choices):
+            return choices[index - 1]
+        print("Invalid selection; keeping current value.")
+        return current
+    if allow_custom:
+        return value
+    print("Invalid selection; keeping current value.")
+    return current
+
+
+def _prompt_text(label: str, current: str | None = None) -> str | None:
+    suffix = f" [{current}]" if current else ""
+    value = input(f"{label}{suffix}: ").strip()
+    return value or current
+
+
+def _confirm(label: str, *, default: bool = False) -> bool:
+    suffix = "Y/n" if default else "y/N"
+    value = input(f"{label}? [{suffix}] ").strip().lower()
+    if not value:
+        return default
+    return value in {"y", "yes"}
+
+
+def _set_model(config, model: str | None) -> None:
+    if not model:
+        return
+    if "/" in model:
+        provider, model_name = model.split("/", 1)
+        config.agent.provider = provider
+        config.agent.model = model_name
+    else:
+        config.agent.model = model
+
+
+def _current_model(config) -> str | None:
+    if not config.agent.model:
+        return None
+    if "/" in config.agent.model or not config.agent.provider:
+        return config.agent.model
+    return f"{config.agent.provider}/{config.agent.model}"

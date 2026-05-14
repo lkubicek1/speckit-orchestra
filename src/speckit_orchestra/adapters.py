@@ -76,11 +76,12 @@ class OpencodeCliAdapter(AgentHarness):
 
         if smoke:
             prompt = "Print exactly: SPECKIT_ORCHESTRA_READY\n"
+            invocation = self.build_invocation(config, root, prompt)
             try:
                 result = subprocess.run(
-                    [command, *config.agent.args],
-                    input=prompt,
-                    cwd=root,
+                    [invocation.command, *invocation.args],
+                    input=invocation.stdin,
+                    cwd=invocation.cwd,
                     text=True,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -107,7 +108,7 @@ class OpencodeCliAdapter(AgentHarness):
     def build_invocation(self, config: Config, root: Path, prompt: str) -> AgentInvocation:
         return AgentInvocation(
             command=config.agent.command,
-            args=list(config.agent.args),
+            args=build_opencode_args(config),
             cwd=root,
             stdin=prompt,
             timeout_ms=config.agent.timeoutMs,
@@ -173,3 +174,30 @@ ADAPTERS: dict[str, AgentHarness] = {"opencode": OpencodeCliAdapter()}
 
 def get_adapter(name: str) -> AgentHarness | None:
     return ADAPTERS.get(name)
+
+
+def build_opencode_args(config: Config) -> list[str]:
+    args = list(config.agent.args or ["run"])
+    if not args:
+        args.append("run")
+    model = _qualified_model(config.agent.provider, config.agent.model)
+    _append_flag(args, ["--model", "-m"], "--model", model)
+    _append_flag(args, ["--variant"], "--variant", config.agent.variant)
+    _append_flag(args, ["--agent"], "--agent", config.agent.opencodeAgent)
+    if config.agent.thinking and "--thinking" not in args:
+        args.append("--thinking")
+    return args
+
+
+def _qualified_model(provider: str | None, model: str | None) -> str | None:
+    if not model:
+        return None
+    if "/" in model or not provider:
+        return model
+    return f"{provider}/{model}"
+
+
+def _append_flag(args: list[str], existing_flags: list[str], flag: str, value: str | None) -> None:
+    if not value or any(existing in args for existing in existing_flags):
+        return
+    args.extend([flag, value])

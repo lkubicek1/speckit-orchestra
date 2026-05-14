@@ -76,6 +76,19 @@ Initialize orchestration config:
 speckit-orchestra init --agent opencode --commit-mode ask
 ```
 
+When run in an interactive terminal, `init` can discover local opencode providers, models, and agents and present a small setup menu. In scripts, pass values directly:
+
+```bash
+speckit-orchestra init \
+  --agent opencode \
+  --provider openai \
+  --model gpt-5.5 \
+  --variant high \
+  --opencode-agent build \
+  --commit-mode ask \
+  --yes
+```
+
 Generate epics from `tasks.md`:
 
 ```bash
@@ -133,7 +146,31 @@ Useful options:
 
 - `--config-dir <path>` changes the orchestration directory.
 - `--commit-mode auto|ask|never` controls commits after successful epics.
+- `--provider <id>` sets the provider portion of the opencode model.
+- `--model <id>` sets the model, either as `provider/model` or a model name paired with `--provider`.
+- `--variant <name>` sets provider-specific reasoning effort, such as `minimal`, `high`, or `max`.
+- `--opencode-agent <name>` passes `--agent <name>` to `opencode run`.
+- `--thinking` passes `--thinking` to `opencode run`.
+- `--discover` or `--no-discover` controls the interactive opencode setup menu.
 - `--yes` overwrites an existing config promptlessly.
+
+### `configure`
+
+Updates adapter runtime settings after initialization.
+
+```bash
+speckit-orchestra configure
+speckit-orchestra configure --model github-copilot/claude-sonnet-4.5 --variant high
+speckit-orchestra configure --discover
+```
+
+With no direct options in an interactive terminal, `configure` opens the same opencode discovery menu used by `init`. It discovers options with local opencode commands:
+
+- `opencode models`
+- `opencode providers list`
+- `opencode agent list`
+
+Discovery is best effort. Provider credentials and auth stay in opencode; `speckit-orchestra` only stores project-level runtime selections.
 
 ### `refine`
 
@@ -183,6 +220,37 @@ speckit-orchestra doctor --agent opencode
 ```
 
 For `opencode`, doctor verifies command availability, attempts `opencode --version`, and runs a harmless non-interactive smoke prompt unless `--skip-smoke` is used.
+
+## opencode Model Configuration
+
+The opencode adapter builds an invocation from first-class config fields and then passes the prompt over stdin.
+
+```yaml
+agent:
+  adapter: opencode
+  mode: cli
+  command: opencode
+  args:
+    - run
+  provider: openai
+  model: gpt-5.5
+  variant: high
+  opencodeAgent: build
+  thinking: false
+  promptInput: stdin
+  outputFormat: text
+  timeoutMs: 1800000
+```
+
+This renders roughly as:
+
+```bash
+opencode run --model openai/gpt-5.5 --variant high --agent build
+```
+
+You can still use `agent.args` as an escape hatch. If `agent.args` already contains `--model`, `--variant`, or `--agent`, the adapter does not add duplicate flags.
+
+Keep these settings outside the prompt. Prompt text can request behavior, but provider routing, model selection, reasoning effort, and agent choice are runtime invocation settings and should be configured explicitly.
 
 ### `adapters`
 
