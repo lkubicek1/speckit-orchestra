@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 import shutil
 import subprocess
 import sys
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 
 import yaml
 
+from . import __version__
 from .adapters import ADAPTERS, get_adapter
 from .config import default_config, load_config, write_config
 from .epics import write_epics
-from .feature import load_feature_artifacts
+from .feature import discover_feature_paths, load_feature_artifacts
 from .opencode_discovery import OpencodeDiscovery, discover_opencode
 from .orchestrator import RunOptions, run_feature
 from .refinement import generate_epic_document
@@ -21,11 +24,26 @@ from .utils import find_repo_root, relpath
 from .validation import epics_path, feature_state_dir, validate_feature
 
 
+PACKAGE_NAME = "speckit-orchestra"
+ANSI_BOLD = "\x1b[1m"
+ANSI_DIM = "\x1b[2m"
+ANSI_REVERSE = "\x1b[7m"
+ANSI_RESET = "\x1b[0m"
+_CUSTOM_SELECTION = object()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
-    root = find_repo_root(Path.cwd())
     try:
+        args = parser.parse_args(argv)
+        if args.version:
+            return cmd_version(args)
+        if args.update:
+            return cmd_update(args)
+        if not hasattr(args, "func"):
+            parser.print_help(sys.stderr)
+            return 2
+        root = find_repo_root(Path.cwd())
         return args.func(args, root)
     except KeyboardInterrupt:
         print("interrupted", file=sys.stderr)
@@ -37,7 +55,9 @@ def main(argv: list[str] | None = None) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="speckit-orchestra", description="Orchestrate Spec Kit tasks through AI agent CLIs.")
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument("--version", action="store_true", help="Print the installed version and exit")
+    parser.add_argument("--update", action="store_true", help="Upgrade speckit-orchestra in the current Python environment")
+    sub = parser.add_subparsers(dest="command")
 
     init = sub.add_parser("init", help="Initialize .spec-orchestra/config.yaml")
     init.add_argument("--agent", default="opencode")
@@ -66,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     configure.set_defaults(func=cmd_configure)
 
     refine = sub.add_parser("refine", help="Generate epics.yaml from Spec Kit artifacts")
-    refine.add_argument("feature")
+    refine.add_argument("feature", nargs="?")
     refine.add_argument("--output")
     refine.add_argument("--force", action="store_true")
     refine.add_argument("--dry-run", action="store_true")
@@ -76,7 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
     refine.set_defaults(func=cmd_refine)
 
     validate = sub.add_parser("validate", help="Validate config, feature artifacts, and epics.yaml")
-    validate.add_argument("feature")
+    validate.add_argument("feature", nargs="?")
     validate.set_defaults(func=cmd_validate)
 
     run = sub.add_parser("run", help="Run all pending epics or one epic")
@@ -84,7 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.set_defaults(func=cmd_run)
 
     resume = sub.add_parser("resume", help="Resume a blocked or interrupted run")
-    resume.add_argument("feature")
+    resume.add_argument("feature", nargs="?")
     resume.add_argument("--allow-dirty", action="store_true")
     resume.add_argument("--no-tests", action="store_true")
     resume.add_argument("--max-retries", type=int)
@@ -93,11 +113,11 @@ def build_parser() -> argparse.ArgumentParser:
     resume.set_defaults(func=cmd_resume)
 
     status = sub.add_parser("status", help="Show feature execution status")
-    status.add_argument("feature")
+    status.add_argument("feature", nargs="?")
     status.set_defaults(func=cmd_status)
 
     report = sub.add_parser("report", help="Generate and print a feature report")
-    report.add_argument("feature")
+    report.add_argument("feature", nargs="?")
     report.set_defaults(func=cmd_report)
 
     doctor = sub.add_parser("doctor", help="Check environment readiness")
@@ -111,7 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_run_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("feature")
+    parser.add_argument("feature", nargs="?")
     parser.add_argument("epic", nargs="?")
     parser.add_argument("--agent")
     parser.add_argument("--mode")
@@ -183,7 +203,8 @@ def cmd_configure(args, root: Path) -> int:
 
 def cmd_refine(args, root: Path) -> int:
     config = load_config(root)
-    doc = generate_epic_document(root, args.feature, config, agent=args.agent)
+    feature = _resolve_feature_arg(args, root, config)
+    doc = generate_epic_document(root, feature, config, agent=args.agent)
     data = doc.model_dump(mode="json")
     if args.dry_run:
         print(yaml.safe_dump(data, sort_keys=False, allow_unicode=False))
@@ -196,7 +217,7 @@ def cmd_refine(args, root: Path) -> int:
         return 2
     write_epics(output, doc)
     print(relpath(output, root))
-    report = validate_feature(root, args.feature, config)
+    report = validate_feature(root, feature, config)
     if not report.ok:
         for error in report.errors:
             print(f"error: {error}", file=sys.stderr)
@@ -206,7 +227,8 @@ def cmd_refine(args, root: Path) -> int:
 
 def cmd_validate(args, root: Path) -> int:
     config = load_config(root)
-    report = validate_feature(root, args.feature, config)
+    feature = _resolve_feature_arg(args, root, config)
+    report = validate_feature(root, feature, config)
     for warning in report.warnings:
         print(f"warning: {warning}")
     if not report.ok:
@@ -219,10 +241,11 @@ def cmd_validate(args, root: Path) -> int:
 
 def cmd_run(args, root: Path) -> int:
     config = load_config(root)
+    feature = _resolve_feature_arg(args, root, config)
     only = args.only or args.epic
     return run_feature(
         root,
-        args.feature,
+        feature,
         config,
         RunOptions(
             only=only,
@@ -243,9 +266,10 @@ def cmd_run(args, root: Path) -> int:
 
 def cmd_resume(args, root: Path) -> int:
     config = load_config(root)
+    feature = _resolve_feature_arg(args, root, config)
     return run_feature(
         root,
-        args.feature,
+        feature,
         config,
         RunOptions(
             allow_dirty=args.allow_dirty,
@@ -260,7 +284,8 @@ def cmd_resume(args, root: Path) -> int:
 
 def cmd_status(args, root: Path) -> int:
     config = load_config(root)
-    artifacts = load_feature_artifacts(root, args.feature)
+    feature = _resolve_feature_arg(args, root, config)
+    artifacts = load_feature_artifacts(root, feature)
     path = epics_path(root, config, artifacts.id)
     if not path.exists():
         print(f"No epics.yaml found for {artifacts.id}.")
@@ -297,7 +322,8 @@ def cmd_status(args, root: Path) -> int:
 
 def cmd_report(args, root: Path) -> int:
     config = load_config(root)
-    artifacts = load_feature_artifacts(root, args.feature)
+    feature = _resolve_feature_arg(args, root, config)
+    artifacts = load_feature_artifacts(root, feature)
     from .epics import load_epics
 
     doc = load_epics(epics_path(root, config, artifacts.id))
@@ -331,6 +357,72 @@ def cmd_adapters(args, root: Path) -> int:
     for name, adapter in ADAPTERS.items():
         print(f"{name}\tmode={adapter.mode}")
     return 0
+
+
+def cmd_version(args) -> int:
+    print(f"speckit-orchestra {_installed_version()}")
+    return 0
+
+
+def cmd_update(args) -> int:
+    before = _installed_version()
+    command = [sys.executable, "-m", "pip", "install", "--upgrade", PACKAGE_NAME]
+    print(f"speckit-orchestra current version: {before}")
+    print(f"updating with: {shlex.join(command)}")
+    result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        _print_subprocess_output(result)
+        print("error: update failed", file=sys.stderr)
+        return result.returncode or 1
+    after = _installed_version_from_subprocess() or _installed_version()
+    print(f"speckit-orchestra installed version: {after}")
+    if after == before:
+        print("Already up to date.")
+    else:
+        print(f"Updated from {before} to {after}.")
+    return 0
+
+
+def _installed_version() -> str:
+    try:
+        return importlib_metadata.version(PACKAGE_NAME)
+    except importlib_metadata.PackageNotFoundError:
+        return __version__
+
+
+def _installed_version_from_subprocess() -> str | None:
+    code = "from importlib import metadata; print(metadata.version('speckit-orchestra'))"
+    result = subprocess.run([sys.executable, "-c", code], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def _print_subprocess_output(result: subprocess.CompletedProcess[str]) -> None:
+    if result.stdout.strip():
+        print(result.stdout.strip())
+    if result.stderr.strip():
+        print(result.stderr.strip(), file=sys.stderr)
+
+
+def _resolve_feature_arg(args, root: Path, config) -> str:
+    feature = getattr(args, "feature", None)
+    if feature:
+        return feature
+    return _select_feature(root, config)
+
+
+def _select_feature(root: Path, config) -> str:
+    features = discover_feature_paths(root, config.project.specRoot)
+    if not features:
+        raise ValueError(f"no Spec Kit features found under {config.project.specRoot}")
+    if not _terminal_interactive():
+        raise ValueError("feature argument is required when stdin is not interactive")
+    choices = [relpath(path, root) for path in features]
+    selected = _choose("Feature", choices)
+    if not selected:
+        raise ValueError("no feature selected")
+    return selected
 
 
 def _generic_doctor_checks(root: Path) -> list[dict[str, object]]:
@@ -379,7 +471,7 @@ def _should_discover(value: bool | None, *, default: bool, config) -> bool:
     if config.agent.adapter != "opencode":
         return False
     enabled = default if value is None else value
-    if enabled and not sys.stdin.isatty():
+    if enabled and not _terminal_interactive():
         print("warning: opencode discovery requires an interactive terminal; skipping menu", file=sys.stderr)
         return False
     return enabled
@@ -451,10 +543,20 @@ def _model_choices(discovery: OpencodeDiscovery, provider: str | None) -> list[s
 def _choose(label: str, choices: list[str], *, current: str | None = None, allow_custom: bool = False) -> str | None:
     if not choices:
         return _prompt_text(label, current) if allow_custom else current
-    print(f"\n{label}:")
+    if _terminal_interactive():
+        selected = _arrow_choose(label, choices, current=current, allow_custom=allow_custom)
+        if selected is _CUSTOM_SELECTION:
+            return _prompt_text(label, current)
+        return selected
+    return _numbered_choose(label, choices, current=current, allow_custom=allow_custom)
+
+
+def _numbered_choose(label: str, choices: list[str], *, current: str | None = None, allow_custom: bool = False) -> str | None:
+    title = f"{ANSI_BOLD}{label}{ANSI_RESET}" if sys.stdout.isatty() else label
+    print(f"\n{title}")
     for index, choice in enumerate(choices, start=1):
-        marker = " (current)" if choice == current else ""
-        print(f"  {index}. {choice}{marker}")
+        marker = " [current]" if choice == current else ""
+        print(f"  {index:>2}. {choice}{marker}")
     custom = " or type a custom value" if allow_custom else ""
     prompt = f"Choose {label.lower()} [Enter to keep"
     prompt += f" {current}" if current else " blank"
@@ -472,6 +574,104 @@ def _choose(label: str, choices: list[str], *, current: str | None = None, allow
         return value
     print("Invalid selection; keeping current value.")
     return current
+
+
+def _arrow_choose(
+    label: str,
+    choices: list[str],
+    *,
+    current: str | None = None,
+    allow_custom: bool = False,
+) -> str | None | object:
+    try:
+        import termios
+        import tty
+    except ImportError:
+        return _numbered_choose(label, choices, current=current, allow_custom=allow_custom)
+
+    selected = choices.index(current) if current in choices else 0
+    fd = sys.stdin.fileno()
+    try:
+        old_settings = termios.tcgetattr(fd)
+    except termios.error:
+        return _numbered_choose(label, choices, current=current, allow_custom=allow_custom)
+    rendered_lines = 0
+    sys.stdout.write("\x1b[?25l")
+    try:
+        tty.setcbreak(fd)
+        while True:
+            lines = _menu_lines(label, choices, selected, current=current, allow_custom=allow_custom)
+            if rendered_lines:
+                sys.stdout.write(f"\x1b[{rendered_lines}A")
+            for line in lines:
+                sys.stdout.write("\x1b[2K\r" + line + "\n")
+            sys.stdout.flush()
+            rendered_lines = len(lines)
+
+            key = sys.stdin.read(1)
+            if key == "\x03":
+                raise KeyboardInterrupt
+            if key in {"\r", "\n"}:
+                return choices[selected]
+            if key == "\x1b":
+                next_key = _read_key_if_ready()
+                if next_key == "[":
+                    direction = _read_key_if_ready()
+                    if direction == "A":
+                        selected = (selected - 1) % len(choices)
+                    elif direction == "B":
+                        selected = (selected + 1) % len(choices)
+                    continue
+                return current
+            if key.lower() == "k":
+                selected = (selected - 1) % len(choices)
+            elif key.lower() == "j":
+                selected = (selected + 1) % len(choices)
+            elif key.lower() == "q":
+                return current
+            elif allow_custom and key.lower() == "c":
+                return _CUSTOM_SELECTION
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        sys.stdout.write("\x1b[?25h")
+        sys.stdout.flush()
+
+
+def _menu_lines(
+    label: str,
+    choices: list[str],
+    selected: int,
+    *,
+    current: str | None = None,
+    allow_custom: bool = False,
+) -> list[str]:
+    lines = [f"{ANSI_BOLD}{label}{ANSI_RESET}"]
+    for index, choice in enumerate(choices):
+        prefix = ">" if index == selected else " "
+        marker = " [current]" if choice == current else ""
+        text = f"{prefix} {choice}{marker}"
+        if index == selected:
+            text = f"{ANSI_REVERSE}{text}{ANSI_RESET}"
+        lines.append(text)
+    keep = "keep current" if current else "cancel"
+    footer = f"Use Up/Down or j/k, Enter to select, q/Esc to {keep}"
+    if allow_custom:
+        footer += ", c for custom"
+    lines.append(f"{ANSI_DIM}{footer}.{ANSI_RESET}")
+    return lines
+
+
+def _read_key_if_ready(timeout: float = 0.05) -> str:
+    import select
+
+    ready, _, _ = select.select([sys.stdin], [], [], timeout)
+    if not ready:
+        return ""
+    return sys.stdin.read(1)
+
+
+def _terminal_interactive() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
 
 
 def _prompt_text(label: str, current: str | None = None) -> str | None:

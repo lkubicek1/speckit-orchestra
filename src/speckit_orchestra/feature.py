@@ -10,6 +10,7 @@ from .utils import relpath
 TASK_RE = re.compile(r"\b(T\d{3,})\b")
 HEADING_RE = re.compile(r"^\s{0,3}#{2,5}\s+(.+?)\s*$")
 CHECKBOX_RE = re.compile(r"^\s*[-*]\s+\[[ xX]\]\s*")
+REQUIRED_ARTIFACT_NAMES = ("spec.md", "plan.md", "tasks.md")
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,22 @@ def load_feature_artifacts(root: Path, feature: str) -> FeatureArtifacts:
         tasks=path / "tasks.md",
         optional=tuple(optional),
     )
+
+
+def discover_feature_paths(root: Path, spec_root: str = "specs") -> list[Path]:
+    path = Path(spec_root)
+    if not path.is_absolute():
+        path = root / path
+    if not path.exists():
+        return []
+
+    features: list[Path] = []
+    for candidate in path.iterdir():
+        if not candidate.is_dir() or candidate.name.startswith("."):
+            continue
+        if any((candidate / name).exists() for name in REQUIRED_ARTIFACT_NAMES):
+            features.append(candidate.resolve())
+    return sorted(features, key=lambda feature: feature.name)
 
 
 def missing_required_artifacts(artifacts: FeatureArtifacts) -> list[Path]:

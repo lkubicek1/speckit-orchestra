@@ -93,6 +93,8 @@ Generate epics from `tasks.md`:
 
 ```bash
 speckit-orchestra refine specs/001-user-auth
+# or omit the feature and pick from the detected-feature menu
+speckit-orchestra refine
 ```
 
 Review and edit the generated file before execution:
@@ -105,12 +107,14 @@ Validate readiness:
 
 ```bash
 speckit-orchestra validate specs/001-user-auth
+speckit-orchestra validate
 ```
 
 Run the full feature:
 
 ```bash
 speckit-orchestra run specs/001-user-auth
+speckit-orchestra run
 ```
 
 Run one epic only:
@@ -123,6 +127,7 @@ Resume after resolving a blocker:
 
 ```bash
 speckit-orchestra resume specs/001-user-auth
+speckit-orchestra resume
 ```
 
 Inspect status and reports:
@@ -130,6 +135,13 @@ Inspect status and reports:
 ```bash
 speckit-orchestra status specs/001-user-auth
 speckit-orchestra report specs/001-user-auth
+```
+
+Version and update helpers are available from any installed script name:
+
+```bash
+sko --version
+sko --update
 ```
 
 ## Commands
@@ -179,7 +191,10 @@ Generates epics from Spec Kit artifacts.
 ```bash
 speckit-orchestra refine specs/001-user-auth --force
 speckit-orchestra refine specs/001-user-auth --dry-run
+speckit-orchestra refine --dry-run
 ```
+
+If `feature` is omitted in an interactive terminal, `refine` opens a small keyboard menu of detected directories under `specs/`. Use Up/Down or `j`/`k`, then Enter.
 
 The built-in refiner is deterministic. It parses `T001`-style tasks, groups them by section heading, preserves every task exactly once, creates sequential dependencies, guesses file scopes from paths mentioned in tasks, and excludes Spec Kit source files by default.
 
@@ -189,7 +204,10 @@ Checks required artifacts, `epics.yaml` schema, task coverage, duplicate task as
 
 ```bash
 speckit-orchestra validate specs/001-user-auth
+speckit-orchestra validate
 ```
+
+If `feature` is omitted, `validate` uses the same detected-feature selector.
 
 ### `run`
 
@@ -200,7 +218,10 @@ speckit-orchestra run specs/001-user-auth --commit never
 speckit-orchestra run specs/001-user-auth --dry-run
 speckit-orchestra run specs/001-user-auth --from EPIC-003
 speckit-orchestra run specs/001-user-auth --only EPIC-004
+speckit-orchestra run --dry-run
 ```
+
+If `feature` is omitted, `run`, `resume`, `status`, and `report` prompt with the detected-feature selector. Non-interactive shells still need an explicit feature path.
 
 Useful options:
 
@@ -220,6 +241,15 @@ speckit-orchestra doctor --agent opencode
 ```
 
 For `opencode`, doctor verifies command availability, attempts `opencode --version`, and runs a harmless non-interactive smoke prompt unless `--skip-smoke` is used.
+
+### Version and update
+
+```bash
+sko --version
+sko --update
+```
+
+`--version` prints the installed package version. `--update` runs `python -m pip install --upgrade speckit-orchestra` in the current Python environment and reports the version before and after the upgrade.
 
 ## opencode Model Configuration
 
