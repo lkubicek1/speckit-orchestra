@@ -11,7 +11,7 @@ from .utils import relpath
 
 
 PATH_RE = re.compile(
-    r"(?:(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_./*{}-]+|[A-Za-z0-9_.-]+\.(?:py|ts|tsx|js|jsx|json|ya?ml|md|toml|go|rs|java|kt|cs|rb|php|sql|sh))"
+    r"(?:(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_./*{}-]+|[A-Za-z0-9_.-]+\.(?:tsx|jsx|json|ya?ml|html|toml|java|php|css|sql|py|ts|js|md|go|rs|kt|cs|rb|sh))"
 )
 RISK_WORDS = {"auth", "security", "migration", "database", "payment", "billing", "secret", "infra", "deploy"}
 

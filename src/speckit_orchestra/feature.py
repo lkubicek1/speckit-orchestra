@@ -89,6 +89,8 @@ def parse_tasks(tasks_md: str) -> list[Task]:
         if heading:
             section = _clean_heading(heading.group(1))
             continue
+        if not CHECKBOX_RE.match(line):
+            continue
         match = TASK_RE.search(line)
         if not match:
             continue

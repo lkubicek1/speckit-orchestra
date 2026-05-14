@@ -44,3 +44,53 @@ def test_generated_scope_excludes_spec_artifacts(tmp_path: Path) -> None:
 
     assert "specs/001-demo/spec.md" in doc.epics[0].scope.exclude
     assert ".spec-orchestra/**" in doc.epics[0].scope.exclude
+
+
+def test_generate_epics_ignores_non_task_references(tmp_path: Path) -> None:
+    feature = write_feature(tmp_path)
+    (feature / "tasks.md").write_text(
+        """# Tasks
+
+## Implementation
+- [ ] T001 Create src/models/user.py
+- [ ] T002 Add tests/models/test_user.py
+
+## Dependencies & Execution Order
+- Implementation mentions T001 and T002 for ordering context.
+
+## Parallel Example: Implementation
+```text
+Task: "T001 Create src/models/user.py"
+Task: "T002 Add tests/models/test_user.py"
+```
+""",
+        encoding="utf-8",
+    )
+    config = default_config(tmp_path)
+
+    doc = generate_epic_document(tmp_path, str(feature), config)
+
+    task_ids = [task for epic in doc.epics for task in epic.tasks]
+    assert task_ids == ["T001", "T002"]
+
+
+def test_generated_scope_preserves_root_file_extensions(tmp_path: Path) -> None:
+    feature = write_feature(tmp_path)
+    (feature / "tasks.md").write_text(
+        """# Tasks
+
+## Setup
+- [ ] T001 Configure `package.json`, `tsconfig.app.json`, and `index.html`
+- [ ] T002 Implement `src/App.tsx`
+""",
+        encoding="utf-8",
+    )
+    config = default_config(tmp_path)
+
+    doc = generate_epic_document(tmp_path, str(feature), config)
+
+    assert "package.json" in doc.epics[0].scope.include
+    assert "tsconfig.app.json" in doc.epics[0].scope.include
+    assert "index.html" in doc.epics[0].scope.include
+    assert "package.js" not in doc.epics[0].scope.include
+    assert "tsconfig.app.js" not in doc.epics[0].scope.include
