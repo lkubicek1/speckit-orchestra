@@ -63,8 +63,12 @@ def run_feature(root, feature: str, config: Config, options: RunOptions) -> int:
         if git.has_conflicts(root):
             print("error: git conflict markers or unmerged paths are present", file=sys.stderr)
             return 4
-        if not git.is_clean(root):
-            print("error: working tree is dirty; use --allow-dirty to override", file=sys.stderr)
+        dirty_paths = _dirty_paths_for_run_preflight(root, config)
+        if dirty_paths:
+            print(
+                "error: working tree is dirty; use --allow-dirty to override\n" + _format_paths(dirty_paths),
+                file=sys.stderr,
+            )
             return 4
 
     feature_dir = feature_state_dir(root, config, doc.feature.id)
@@ -192,7 +196,7 @@ def _run_epic(root, feature: str, config: Config, doc, state, feature_dir, epic:
             _mark_blocked_from_result(state, feature_dir, epic.id, result.blocker or _blocker("agent_error", result.summary))
             return 3
 
-        changed = git.changed_files(root)
+        changed = _attempt_changed_files(root, config, doc.feature.id, before_status)
         atomic_write_text(attempt_dir / "changed-files.txt", "\n".join(changed) + ("\n" if changed else ""))
         atomic_write_text(attempt_dir / "diff.patch", git.diff_patch(root))
 
@@ -280,7 +284,10 @@ def _run_validation(root, config: Config, epic: Epic, attempt_dir, options: RunO
         log_parts.append(result.stderr)
         log_parts.append(f"\nexit code: {result.returncode}\n")
         if result.returncode != 0:
-            ok = False
+            if epic.validation.expectedFailureAllowed:
+                log_parts.append("failure accepted because expectedFailureAllowed is true\n")
+            else:
+                ok = False
     summary = "".join(log_parts)
     atomic_write_text(attempt_dir / "validation.log", summary)
     return ok, summary
@@ -334,6 +341,57 @@ def _matches_any(path: str, patterns: list[str]) -> bool:
         if fnmatch.fnmatchcase(normalized, pat) or PurePosixPath(normalized).match(pat):
             return True
     return False
+
+
+def _dirty_paths_for_run_preflight(root, config: Config) -> list[str]:
+    return [path for path in git.changed_files(root) if not _is_orchestra_project_artifact(path, config)]
+
+
+def _attempt_changed_files(root, config: Config, feature_id: str, before_status: str) -> list[str]:
+    after_status = git.status_porcelain(root)
+    return _changed_paths_since_status(before_status, after_status, config, feature_id)
+
+
+def _changed_paths_since_status(before_status: str, after_status: str, config: Config, feature_id: str) -> list[str]:
+    before = _status_paths(before_status)
+    after = _status_paths(after_status)
+    changed = sorted(after - before)
+    return [path for path in changed if not _is_orchestra_runtime_artifact(path, config, feature_id)]
+
+
+def _status_paths(status: str) -> set[str]:
+    paths: set[str] = set()
+    for line in status.splitlines():
+        if not line:
+            continue
+        path = line[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        if path:
+            paths.add(path)
+    return paths
+
+
+def _is_orchestra_project_artifact(path: str, config: Config) -> bool:
+    root = config.project.orchestraRoot.strip("/")
+    return path == root or path.startswith(f"{root}/")
+
+
+def _is_orchestra_runtime_artifact(path: str, config: Config, feature_id: str) -> bool:
+    root = config.project.orchestraRoot.strip("/")
+    feature_prefix = f"{root}/features/{feature_id}/"
+    if path.startswith(f"{root}/migrations/"):
+        return True
+    if not path.startswith(feature_prefix):
+        return False
+    relative = path[len(feature_prefix) :]
+    return relative in {"state.json", "events.jsonl", "lock.json"} or relative.startswith(("runs/", "reports/"))
+
+
+def _format_paths(paths: list[str]) -> str:
+    shown = paths[:10]
+    suffix = "" if len(paths) <= len(shown) else f"\n... and {len(paths) - len(shown)} more"
+    return "\n".join(f"  {path}" for path in shown) + suffix
 
 
 def _allows_no_changes(epic: Epic) -> bool:
@@ -437,5 +495,8 @@ def _print_dry_run(doc, options: RunOptions) -> int:
         epic = next(epic for epic in doc.epics if epic.id == epic_id)
         deps = ", ".join(epic.dependencies) or "none"
         commands = "; ".join(shlex.quote(cmd) for cmd in epic.validation.commands) or "manual checks"
-        print(f"- {epic.id}: {epic.title} | deps: {deps} | validation: {commands}")
+        approval = " | approval: required" if epic.approval.required else ""
+        print(f"- {epic.id}: {epic.title} | deps: {deps} | validation: {commands}{approval}")
+    if any(next(epic for epic in doc.epics if epic.id == epic_id).approval.required for epic_id in targets):
+        print("warning: one or more selected epics require an interactive approval prompt before execution")
     return 0

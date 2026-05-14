@@ -77,6 +77,10 @@ def validate_feature(root: Path, feature: str, config: Config, *, check_git: boo
             report.errors.append(f"{epic.id} has no scope.include patterns")
         if not epic.validation.commands and not epic.validation.manualChecks:
             report.errors.append(f"{epic.id} has no validation commands or manual checks")
+        if epic.approval.required:
+            report.warnings.append(f"{epic.id} requires interactive approval before run: {epic.approval.reason or 'approval required'}")
+        if epic.validation.expectedFailureAllowed and epic.validation.commands:
+            report.warnings.append(f"{epic.id} allows failing validation commands for test-first work")
 
     source_set = set(source_ids)
     used = set(epic_task_counts)

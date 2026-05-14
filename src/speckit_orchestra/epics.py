@@ -38,6 +38,7 @@ class Scope(EpicModel):
 class Validation(EpicModel):
     commands: list[str] = Field(default_factory=list)
     manualChecks: list[str] = Field(default_factory=list)
+    expectedFailureAllowed: bool = False
 
     @model_validator(mode="after")
     def has_validation(self) -> "Validation":

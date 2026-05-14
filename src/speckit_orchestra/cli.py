@@ -18,6 +18,7 @@ from .feature import discover_feature_paths, load_feature_artifacts
 from .migration import CURRENT_CONFIG_VERSION, migrate_project
 from .opencode_discovery import OpencodeDiscovery, discover_opencode
 from .orchestrator import RunOptions, run_feature
+from .project import clean_project, ensure_git_info_exclude
 from .refinement import generate_epic_document
 from .reporting import render_summary_report, write_summary_report
 from .state import load_state
@@ -127,6 +128,13 @@ def build_parser() -> argparse.ArgumentParser:
     migrate.add_argument("--no-backup", action="store_true", help="Do not back up changed files before writing")
     migrate.set_defaults(func=cmd_migrate)
 
+    clean = sub.add_parser("clean", help="Remove project-local speckit-orchestra artifacts")
+    clean.add_argument("--config-dir", default=".spec-orchestra", help="Project orchestration directory")
+    clean.add_argument("--runtime-only", action="store_true", help="Remove run state/logs while keeping config and epics")
+    clean.add_argument("--dry-run", action="store_true", help="Show files that would be removed")
+    clean.add_argument("--yes", action="store_true", help="Remove without an interactive confirmation")
+    clean.set_defaults(func=cmd_clean)
+
     doctor = sub.add_parser("doctor", help="Check environment readiness")
     doctor.add_argument("--agent", default=None)
     doctor.add_argument("--config-dir", default=".spec-orchestra", help="Project orchestration directory")
@@ -179,6 +187,7 @@ def cmd_init(args, root: Path) -> int:
     if _should_discover(args.discover, default=(not args.yes and not direct_agent_config), config=config):
         _configure_opencode_interactive(config, root)
     written = write_config(root, config)
+    ensure_git_info_exclude(root, config.project.orchestraRoot)
     print(relpath(written, root))
     return 0
 
@@ -205,6 +214,7 @@ def cmd_configure(args, root: Path) -> int:
     if _should_discover(args.discover, default=(not direct_agent_config), config=config):
         _configure_opencode_interactive(config, root)
     written = write_config(root, config)
+    ensure_git_info_exclude(root, config.project.orchestraRoot)
     print(relpath(written, root))
     return 0
 
@@ -224,6 +234,7 @@ def cmd_refine(args, root: Path) -> int:
         print(f"error: {relpath(output, root)} already exists; use --force to overwrite", file=sys.stderr)
         return 2
     write_epics(output, doc)
+    ensure_git_info_exclude(root, config.project.orchestraRoot)
     print(relpath(output, root))
     report = validate_feature(root, feature, config)
     if not report.ok:
@@ -249,6 +260,7 @@ def cmd_validate(args, root: Path) -> int:
 
 def cmd_run(args, root: Path) -> int:
     config = load_config(root)
+    ensure_git_info_exclude(root, config.project.orchestraRoot)
     feature = _resolve_feature_arg(args, root, config)
     only = args.only or args.epic
     return run_feature(
@@ -274,6 +286,7 @@ def cmd_run(args, root: Path) -> int:
 
 def cmd_resume(args, root: Path) -> int:
     config = load_config(root)
+    ensure_git_info_exclude(root, config.project.orchestraRoot)
     feature = _resolve_feature_arg(args, root, config)
     return run_feature(
         root,
@@ -367,6 +380,33 @@ def cmd_migrate(args, root: Path) -> int:
         print("Dry run complete; no files were changed.")
     else:
         print("Migration complete.")
+    return 0
+
+
+def cmd_clean(args, root: Path) -> int:
+    if not args.dry_run and not args.yes:
+        if not _terminal_interactive():
+            print("error: clean requires --yes when stdin is not interactive", file=sys.stderr)
+            return 2
+        target = "runtime artifacts" if args.runtime_only else f"{args.config_dir} and local git excludes"
+        if not _confirm(f"Remove {target}", default=False):
+            print("Clean cancelled.")
+            return 0
+
+    result = clean_project(root, config_dir=args.config_dir, dry_run=args.dry_run, runtime_only=args.runtime_only)
+    for error in result.errors:
+        print(f"error: {error}", file=sys.stderr)
+    if not result.ok:
+        return 2
+
+    paths = result.would_remove if args.dry_run else result.removed
+    action = "would remove" if args.dry_run else "removed"
+    for path in paths:
+        print(f"{action}: {relpath(path, root)}")
+    if result.updated_exclude:
+        print("updated: .git/info/exclude")
+    if not paths and not result.updated_exclude:
+        print("No speckit-orchestra project artifacts found.")
     return 0
 
 
@@ -615,8 +655,18 @@ def _version_key(version: str) -> tuple[int, int, int] | None:
 def _resolve_feature_arg(args, root: Path, config) -> str:
     feature = getattr(args, "feature", None)
     if feature:
-        return feature
+        return _resolve_feature_reference(root, config, feature)
     return _select_feature(root, config)
+
+
+def _resolve_feature_reference(root: Path, config, feature: str) -> str:
+    path = Path(feature)
+    if path.is_absolute() or (root / path).exists():
+        return feature
+    spec_candidate = root / config.project.specRoot / feature
+    if spec_candidate.exists():
+        return relpath(spec_candidate, root)
+    return feature
 
 
 def _select_feature(root: Path, config) -> str:

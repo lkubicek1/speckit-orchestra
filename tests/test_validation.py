@@ -45,3 +45,16 @@ def test_validate_detects_missing_task(tmp_path: Path) -> None:
     report = validate_feature(tmp_path, str(feature), config, check_git=False)
 
     assert any("T002" in error for error in report.errors)
+
+
+def test_validate_warns_for_manual_approval(tmp_path: Path) -> None:
+    feature = make_feature(tmp_path)
+    config = default_config(tmp_path)
+    doc = generate_epic_document(tmp_path, str(feature), config)
+    doc.epics[0].approval.required = True
+    doc.epics[0].approval.reason = "review required"
+    write_epics(epics_path(tmp_path, config, "001-demo"), doc)
+
+    report = validate_feature(tmp_path, str(feature), config, check_git=False)
+
+    assert any("EPIC-001 requires interactive approval" in warning for warning in report.warnings)

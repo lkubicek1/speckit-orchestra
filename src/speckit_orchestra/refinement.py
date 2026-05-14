@@ -13,7 +13,11 @@ from .utils import relpath
 PATH_RE = re.compile(
     r"(?:(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_./*{}-]+|[A-Za-z0-9_.-]+\.(?:tsx|jsx|json|ya?ml|html|toml|java|php|css|sql|py|ts|js|md|go|rs|kt|cs|rb|sh))"
 )
+BACKTICK_RE = re.compile(r"`([^`]+)`")
+FILE_EXT_RE = re.compile(r"\.(?:tsx|jsx|json|ya?ml|html|toml|java|php|css|sql|py|ts|js|md|go|rs|kt|cs|rb|sh)$")
 RISK_WORDS = {"auth", "security", "migration", "database", "payment", "billing", "secret", "infra", "deploy"}
+FRONTEND_HINTS = {"vite", "react", "typescript", "npm", "playwright", "vitest", "package.json"}
+SETUP_SCOPE_PATTERNS = {".gitignore", "package-lock.json", "eslint.config.*", "public/**", "src/**"}
 
 
 def generate_epic_document(root: Path, feature: str, config: Config, *, agent: str | None = None) -> EpicDocument:
@@ -54,7 +58,7 @@ def generate_epic_document(root: Path, feature: str, config: Config, *, agent: s
                         "exclude": _scope_exclude(root, artifacts),
                     },
                     "acceptance": _acceptance_for(chunk),
-                    "validation": _validation_for(root),
+                    "validation": _validation_for(root, artifacts, title, chunk),
                     "stopConditions": [
                         "Required context is missing from spec.md, plan.md, or tasks.md.",
                         "The implementation requires edits outside the declared scope.",
@@ -118,16 +122,12 @@ def _risk_for(title: str, tasks: list[Task]) -> str:
 def _scope_include(tasks: list[Task]) -> list[str]:
     globs: set[str] = set()
     for task in tasks:
-        for match in PATH_RE.findall(task.text):
-            path = match.strip("`.,;:()[]")
-            if not path or path.startswith(("http://", "https://")):
-                continue
-            if "/" in path:
-                first = path.split("/", 1)[0]
-                if first not in {"specs", ".spec-orchestra"}:
-                    globs.add(f"{first}/**")
-            else:
-                globs.add(path)
+        for path in _task_paths(task.text):
+            pattern = _scope_pattern(path)
+            if pattern:
+                globs.add(pattern)
+    if _looks_like_setup(tasks):
+        globs.update(SETUP_SCOPE_PATTERNS)
     return sorted(globs) or ["**/*"]
 
 
@@ -145,9 +145,132 @@ def _acceptance_for(tasks: list[Task]) -> list[str]:
     ]
 
 
-def _validation_for(root: Path) -> dict[str, list[str]]:
-    if (root / "package.json").exists():
-        return {"commands": ["npm test"], "manualChecks": []}
+def _validation_for(root: Path, artifacts, section: str, tasks: list[Task]) -> dict[str, object]:
+    if _is_frontend_project(root, artifacts, tasks):
+        if _is_test_first_epic(section, tasks):
+            return {
+                "commands": [],
+                "manualChecks": ["Confirm tests were added for this story and are expected to fail before implementation."],
+                "expectedFailureAllowed": True,
+            }
+        return {"commands": _frontend_validation_commands(artifacts, section, tasks), "manualChecks": []}
     if (root / "pyproject.toml").exists():
         return {"commands": ["uv run pytest"], "manualChecks": []}
     return {"commands": [], "manualChecks": ["Review the changed files against the epic acceptance criteria."]}
+
+
+def _task_paths(text: str) -> list[str]:
+    matches = BACKTICK_RE.findall(text)
+    if not matches:
+        matches = PATH_RE.findall(text)
+    paths: list[str] = []
+    for match in matches:
+        for candidate in re.split(r"\s*(?:,|\band\b)\s*", match):
+            path = candidate.strip("`.,;:()[] ")
+            if path and _looks_like_path(path) and not path.startswith(("http://", "https://")):
+                paths.append(path)
+    return paths
+
+
+def _scope_pattern(path: str) -> str | None:
+    if path.startswith(".spec-orchestra/") or path == ".spec-orchestra":
+        return None
+    normalized = path.strip("/")
+    if not normalized:
+        return None
+    if normalized.endswith("/"):
+        normalized = normalized.rstrip("/")
+    if "/" not in normalized:
+        return normalized
+    first = normalized.split("/", 1)[0]
+    if first == "specs":
+        return normalized
+    return f"{first}/**"
+
+
+def _looks_like_path(path: str) -> bool:
+    return "/" in path or path.endswith("/") or bool(FILE_EXT_RE.search(path)) or path == ".gitignore"
+
+
+def _looks_like_setup(tasks: list[Task]) -> bool:
+    text = " ".join(task.text for task in tasks).lower()
+    return any(marker in text for marker in ("vite", "package.json", "npm", "dependencies", "project dependencies"))
+
+
+def _is_frontend_project(root: Path, artifacts, tasks: list[Task]) -> bool:
+    if (root / "package.json").exists():
+        return True
+    text = " ".join(
+        [
+            _read_lower(artifacts.plan),
+            _read_lower(artifacts.spec),
+            " ".join(task.text for task in tasks).lower(),
+        ]
+    )
+    return any(hint in text for hint in FRONTEND_HINTS)
+
+
+def _is_test_first_epic(section: str, tasks: list[Task]) -> bool:
+    text = " ".join([section, *(task.text for task in tasks)]).lower()
+    return section.lower().startswith("tests for") or "fail before implementation" in text or "confirm they fail" in text
+
+
+def _frontend_validation_commands(artifacts, section: str, tasks: list[Task]) -> list[str]:
+    text = " ".join([section, *(task.text for task in tasks)]).lower()
+    if "polish" in text or "npm run" in text or "final" in text:
+        return _quickstart_commands(artifacts) or [
+            "npm run typecheck",
+            "npm run lint",
+            "npm run test:unit",
+            "npm run e2e",
+            "npm run build",
+        ]
+    if "setup" in text:
+        return ["npm run typecheck"]
+    if "foundational" in text or "blocking prerequisites" in text:
+        return ["npm run typecheck", "npm run build"]
+    return ["npm run typecheck", "npm run test:unit", "npm run build"]
+
+
+def _quickstart_commands(artifacts) -> list[str]:
+    quickstart = next((path for path in artifacts.optional if path.name == "quickstart.md"), None)
+    if quickstart is None:
+        return []
+    commands: list[str] = []
+    text = quickstart.read_text(encoding="utf-8")
+    source = _expected_verification_block(text) or text
+    for command in re.findall(r"\bnpm run [A-Za-z0-9:_-]+", source):
+        if command not in commands:
+            commands.append(command)
+    return commands
+
+
+def _expected_verification_block(text: str) -> str:
+    lines = text.splitlines()
+    in_section = False
+    in_fence = False
+    collected: list[str] = []
+    for line in lines:
+        if line.startswith("## "):
+            if in_section and collected:
+                break
+            in_section = "expected verification" in line.lower()
+            in_fence = False
+            continue
+        if not in_section:
+            continue
+        if line.strip().startswith("```"):
+            if in_fence:
+                break
+            in_fence = True
+            continue
+        if in_fence:
+            collected.append(line)
+    return "\n".join(collected)
+
+
+def _read_lower(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").lower()
+    except OSError:
+        return ""

@@ -16,6 +16,7 @@ The MVP ships with an `opencode` CLI adapter and keeps the orchestration core ha
 - Maintain atomic `state.json`, append-only `events.jsonl`, lock files, and summary reports.
 - Support commit modes: `ask`, `auto`, and `never`.
 - Migrate initialized project artifacts after CLI upgrades with `sko migrate`.
+- Remove project-local orchestration artifacts for a fresh start with `sko clean`.
 
 ## Requirements
 
@@ -145,6 +146,7 @@ sko --version
 sko --update
 sko migrate --dry-run
 sko migrate
+sko clean --dry-run
 ```
 
 ## Commands
@@ -235,6 +237,22 @@ Useful options:
 - `--continue-on-blocker` continues independent epics where possible.
 - `--force-unlock` clears a stale feature lock.
 
+`run` ignores project-local `.spec-orchestra/` setup files during the clean-worktree preflight, and it scope-checks/commits only files newly changed by the current adapter attempt. Runtime artifacts under `.spec-orchestra/features/<feature-id>/runs/`, `reports/`, `state.json`, `events.jsonl`, and `lock.json` are never treated as user implementation changes.
+
+`run --dry-run` marks epics that require manual approval so non-interactive runs can be prepared before execution.
+
+### `clean`
+
+Removes project-local speckit-orchestra artifacts. This does not uninstall the Python package; it cleans the current project so `sko init`/`sko refine` can be tested from a fresh state.
+
+```bash
+sko clean --dry-run
+sko clean --yes
+sko clean --runtime-only --yes
+```
+
+By default, `clean` removes the configured orchestration directory, usually `.spec-orchestra/`, and removes speckit-orchestra's managed local entries from `.git/info/exclude`. Use `--runtime-only` to keep `config.yaml` and `epics.yaml` while deleting state, locks, reports, runs, and migration backups.
+
 ### `doctor`
 
 Checks adapter readiness.
@@ -302,7 +320,7 @@ speckit-orchestra adapters
 
 ## Runtime Artifacts
 
-Runtime files are stored under `.spec-orchestra/` and are ignored by git by default:
+Project-local orchestration files are stored under `.spec-orchestra/`. Volatile run artifacts are ignored locally by default through `.git/info/exclude`:
 
 ```text
 .spec-orchestra/
@@ -325,7 +343,9 @@ Runtime files are stored under `.spec-orchestra/` and are ignored by git by defa
       result.md
 ```
 
-If your team wants to review generated epics in git, remove `.spec-orchestra/` from `.gitignore` or add a narrower ignore rule for only run artifacts.
+If your team does not want to review generated config or epics in git, add a project-level ignore rule for all of `.spec-orchestra/`.
+
+`speckit-orchestra` also installs local `.git/info/exclude` entries for volatile run artifacts during `init`, `configure`, `refine`, `run`, and `resume`. These local excludes do not modify tracked project files. `config.yaml` and `epics.yaml` remain reviewable unless your project-level ignore rules hide all of `.spec-orchestra/`.
 
 ## Commit Behavior
 
@@ -382,6 +402,6 @@ uv build
 
 - Execution is sequential only.
 - The only bundled harness adapter is `opencode` CLI mode.
-- The deterministic refiner does not call a model API; edit generated `epics.yaml` for project-specific grouping and validation commands.
+- The deterministic refiner does not call a model API; edit generated `epics.yaml` for project-specific grouping, scopes, and validation commands when needed.
 - Failed attempt changes are preserved by default for inspection.
 - Manual approval epics require an interactive terminal.

@@ -94,3 +94,108 @@ def test_generated_scope_preserves_root_file_extensions(tmp_path: Path) -> None:
     assert "index.html" in doc.epics[0].scope.include
     assert "package.js" not in doc.epics[0].scope.include
     assert "tsconfig.app.js" not in doc.epics[0].scope.include
+
+
+def test_frontend_setup_scope_allows_scaffold_outputs(tmp_path: Path) -> None:
+    feature = write_feature(tmp_path)
+    (feature / "plan.md").write_text("# Plan\nUse Vite, React, TypeScript, Vitest, and Playwright.\n", encoding="utf-8")
+    (feature / "tasks.md").write_text(
+        """# Tasks
+
+## Phase 1: Setup
+- [ ] T001 Initialize Vite React TypeScript project dependencies and scripts in `package.json` and root HTML shell in `index.html`
+""",
+        encoding="utf-8",
+    )
+    config = default_config(tmp_path)
+
+    doc = generate_epic_document(tmp_path, str(feature), config)
+
+    assert ".gitignore" in doc.epics[0].scope.include
+    assert "package-lock.json" in doc.epics[0].scope.include
+    assert "src/**" in doc.epics[0].scope.include
+    assert doc.epics[0].validation.commands == ["npm run typecheck"]
+
+
+def test_frontend_test_first_epics_are_manual_expected_failure(tmp_path: Path) -> None:
+    feature = write_feature(tmp_path)
+    (feature / "plan.md").write_text("# Plan\nUse Vite, React, TypeScript, Vitest, and Playwright.\n", encoding="utf-8")
+    (feature / "tasks.md").write_text(
+        """# Tasks
+
+## Tests for User Story 1
+Write these tests first and confirm they fail before implementation.
+
+- [ ] T001 Add unit tests in `tests/unit/todo-state.test.ts`
+""",
+        encoding="utf-8",
+    )
+    config = default_config(tmp_path)
+
+    doc = generate_epic_document(tmp_path, str(feature), config)
+
+    assert doc.epics[0].validation.commands == []
+    assert doc.epics[0].validation.manualChecks
+    assert doc.epics[0].validation.expectedFailureAllowed is True
+
+
+def test_explicit_spec_doc_task_is_allowed_in_scope(tmp_path: Path) -> None:
+    feature = write_feature(tmp_path)
+    (feature / "quickstart.md").write_text("# Quickstart\n", encoding="utf-8")
+    (feature / "tasks.md").write_text(
+        """# Tasks
+
+## Polish
+- [ ] T001 Update implementation notes in `specs/001-demo/quickstart.md`
+""",
+        encoding="utf-8",
+    )
+    config = default_config(tmp_path)
+
+    doc = generate_epic_document(tmp_path, str(feature), config)
+
+    assert "specs/001-demo/quickstart.md" in doc.epics[0].scope.include
+    assert "specs/001-demo/quickstart.md" not in doc.epics[0].scope.exclude
+
+
+def test_frontend_polish_uses_quickstart_commands(tmp_path: Path) -> None:
+    feature = write_feature(tmp_path)
+    (feature / "plan.md").write_text("# Plan\nUse Vite and React.\n", encoding="utf-8")
+    (feature / "quickstart.md").write_text(
+        """# Quickstart
+
+## Development
+
+```bash
+npm run dev
+```
+
+## Expected Verification Commands
+
+```bash
+npm run typecheck
+npm run lint
+npm run test:unit
+npm run build
+```
+""",
+        encoding="utf-8",
+    )
+    (feature / "tasks.md").write_text(
+        """# Tasks
+
+## Phase 7: Polish & Cross-Cutting Concerns
+- [ ] T001 Run `npm run typecheck`, `npm run lint`, `npm run test:unit`, and `npm run build`
+""",
+        encoding="utf-8",
+    )
+    config = default_config(tmp_path)
+
+    doc = generate_epic_document(tmp_path, str(feature), config)
+
+    assert doc.epics[0].validation.commands == [
+        "npm run typecheck",
+        "npm run lint",
+        "npm run test:unit",
+        "npm run build",
+    ]

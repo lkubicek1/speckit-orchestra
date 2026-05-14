@@ -58,6 +58,15 @@ def test_migrate_command_parse() -> None:
     assert args.no_backup is True
 
 
+def test_clean_command_parse() -> None:
+    args = build_parser().parse_args(["clean", "--runtime-only", "--dry-run", "--yes"])
+
+    assert args.command == "clean"
+    assert args.runtime_only is True
+    assert args.dry_run is True
+    assert args.yes is True
+
+
 def test_doctor_accepts_config_dir() -> None:
     args = build_parser().parse_args(["doctor", "--config-dir", ".custom-orchestra"])
 
@@ -84,10 +93,10 @@ def test_path_version_doctor_warns_for_version_mismatch(monkeypatch: pytest.Monk
     monkeypatch.setattr(cli.shutil, "which", lambda command: "/usr/local/bin/sko" if command == "sko" else None)
     monkeypatch.setattr(cli, "_version_from_executable", lambda path: "0.1.0")
 
-    checks = _path_version_checks("0.2.0")
+    checks = _path_version_checks(speckit_orchestra.__version__)
 
     assert checks[0]["level"] == "warn"
-    assert "current CLI is 0.2.0" in str(checks[0]["detail"])
+    assert f"current CLI is {speckit_orchestra.__version__}" in str(checks[0]["detail"])
 
 
 def test_version_comparison_uses_semver_order() -> None:
@@ -114,6 +123,15 @@ def test_explicit_feature_does_not_require_interactive_terminal(tmp_path: Path) 
     config = default_config(tmp_path)
 
     feature = _resolve_feature_arg(Namespace(feature="specs/001-demo"), tmp_path, config)
+
+    assert feature == "specs/001-demo"
+
+
+def test_feature_id_resolves_under_spec_root(tmp_path: Path) -> None:
+    make_feature(tmp_path)
+    config = default_config(tmp_path)
+
+    feature = _resolve_feature_arg(Namespace(feature="001-demo"), tmp_path, config)
 
     assert feature == "specs/001-demo"
 
