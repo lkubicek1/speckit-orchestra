@@ -1,0 +1,30 @@
+[project]
+name = "speckit-orchestra"
+version = "0.1.0"
+description = "CLI-first orchestration for Spec Kit task execution through AI coding agent CLIs."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Lee Kubicek" }]
+dependencies = [
+  "pydantic>=2.8",
+  "PyYAML>=6.0",
+]
+
+[project.scripts]
+speckit-orchestra = "speckit_orchestra.cli:main"
+sko = "speckit_orchestra.cli:main"
+orchestra = "speckit_orchestra.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

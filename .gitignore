@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual environments and builds
+.venv/
+dist/
+build/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Node projects orchestrated by this tool may live in examples/ or fixtures
+node_modules/
+
+# speckit-orchestra runtime artifacts are intentionally local and reproducible
+.spec-orchestra/
