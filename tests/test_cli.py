@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 import speckit_orchestra
-from speckit_orchestra.cli import _menu_lines, _resolve_feature_arg, build_parser
-from speckit_orchestra.config import default_config
+from speckit_orchestra.cli import _is_newer_version, _menu_lines, _path_version_checks, _resolve_feature_arg, _version_doctor_checks, build_parser
+from speckit_orchestra.config import default_config, load_config, write_config
 from speckit_orchestra.feature import discover_feature_paths
 
 
@@ -56,6 +56,43 @@ def test_migrate_command_parse() -> None:
     assert args.command == "migrate"
     assert args.dry_run is True
     assert args.no_backup is True
+
+
+def test_doctor_accepts_config_dir() -> None:
+    args = build_parser().parse_args(["doctor", "--config-dir", ".custom-orchestra"])
+
+    assert args.command == "doctor"
+    assert args.config_dir == ".custom-orchestra"
+
+
+def test_project_version_doctor_warns_for_stale_metadata(tmp_path: Path) -> None:
+    config = default_config(tmp_path)
+    config.tool.versionMigrated = "0.1.0"
+    config.tool.lastMigratedAt = "2026-01-01T00:00:00Z"
+    write_config(tmp_path, config)
+
+    checks = _version_doctor_checks(tmp_path, load_config(tmp_path), ".spec-orchestra", include_path=False)
+
+    metadata = next(check for check in checks if check["name"] == "Project CLI metadata")
+    assert metadata["level"] == "warn"
+    assert "run `sko migrate`" in str(metadata["detail"])
+
+
+def test_path_version_doctor_warns_for_version_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    import speckit_orchestra.cli as cli
+
+    monkeypatch.setattr(cli.shutil, "which", lambda command: "/usr/local/bin/sko" if command == "sko" else None)
+    monkeypatch.setattr(cli, "_version_from_executable", lambda path: "0.1.0")
+
+    checks = _path_version_checks("0.2.0")
+
+    assert checks[0]["level"] == "warn"
+    assert "current CLI is 0.2.0" in str(checks[0]["detail"])
+
+
+def test_version_comparison_uses_semver_order() -> None:
+    assert _is_newer_version("0.10.0", "0.2.0") is True
+    assert _is_newer_version("0.2.0", "0.10.0") is False
 
 
 def test_discover_feature_paths_uses_spec_root(tmp_path: Path) -> None:

@@ -241,9 +241,12 @@ Checks adapter readiness.
 
 ```bash
 speckit-orchestra doctor --agent opencode
+speckit-orchestra doctor --config-dir .spec-orchestra --skip-smoke
 ```
 
-For `opencode`, doctor verifies command availability, attempts `opencode --version`, and runs a harmless non-interactive smoke prompt unless `--skip-smoke` is used.
+Doctor reports the current CLI version, executable path, Python path, project config schema version, project-local CLI metadata, and any `sko`, `speckit-orchestra`, or `orchestra` executables found on `PATH`. It warns when project metadata is missing or was last migrated by an older CLI version.
+
+For `opencode`, doctor also verifies command availability, attempts `opencode --version`, and runs a harmless non-interactive smoke prompt unless `--skip-smoke` is used.
 
 ### Version and update
 
@@ -256,7 +259,7 @@ sko migrate
 
 `--version` prints the installed package version. `--update` runs `python -m pip install --upgrade speckit-orchestra` in the current Python environment and reports the version before and after the upgrade.
 
-Run `sko migrate` from an initialized project after updating the CLI. It normalizes `.spec-orchestra/config.yaml` to the current schema, refreshes runtime state summaries, and writes backups under `.spec-orchestra/migrations/<timestamp>/` before changing files. Use `--dry-run` to preview changes, `--no-backup` to skip backups, or `--config-dir <path>` for a non-default orchestration directory.
+Run `sko migrate` from an initialized project after updating the CLI. It normalizes `.spec-orchestra/config.yaml` to the current schema, records the CLI version that last migrated the project, refreshes runtime state summaries, and writes backups under `.spec-orchestra/migrations/<timestamp>/` before changing files. Use `--dry-run` to preview changes, `--no-backup` to skip backups, or `--config-dir <path>` for a non-default orchestration directory.
 
 ## opencode Model Configuration
 

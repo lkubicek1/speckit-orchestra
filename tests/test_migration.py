@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 
+import speckit_orchestra
 from speckit_orchestra.config import default_config, load_config, write_config
 from speckit_orchestra.migration import migrate_project
 
@@ -33,10 +34,13 @@ def test_migrate_normalizes_config_and_backs_up_original(tmp_path: Path) -> None
     assert any("legacyTop" in warning for warning in result.warnings)
     assert any("agent.legacy" in warning for warning in result.warnings)
     config = load_config(tmp_path)
-    assert config.version == 1
+    assert config.version == 2
     assert config.project.name == "demo"
     assert config.agent.mode == "cli"
     assert config.agent.timeoutMs == 1_800_000
+    assert config.tool.versionInitialized is None
+    assert config.tool.versionMigrated == speckit_orchestra.__version__
+    assert config.tool.lastMigratedAt is not None
     migrated = yaml.safe_load(config_file.read_text(encoding="utf-8"))
     assert "legacyTop" not in migrated
     assert "legacy" not in migrated["agent"]
@@ -91,3 +95,11 @@ def test_migrate_reports_missing_config(tmp_path: Path) -> None:
 
     assert not result.ok
     assert any("not initialized" in error for error in result.errors)
+
+
+def test_default_config_records_initial_cli_version(tmp_path: Path) -> None:
+    config = default_config(tmp_path)
+
+    assert config.version == 2
+    assert config.tool.versionInitialized == speckit_orchestra.__version__
+    assert config.tool.versionMigrated == speckit_orchestra.__version__

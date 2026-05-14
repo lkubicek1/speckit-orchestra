@@ -5,7 +5,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from . import __version__
 from .utils import read_yaml, write_yaml
+
+
+CONFIG_VERSION = 2
 
 
 DEFAULT_COMMIT_TEMPLATE = """feat({featureId}): implement {epicId} {epicTitle}
@@ -77,8 +81,14 @@ class LoggingConfig(StrictModel):
     preserveDiffs: bool = True
 
 
+class ToolConfig(StrictModel):
+    versionInitialized: str | None = None
+    versionMigrated: str | None = None
+    lastMigratedAt: str | None = None
+
+
 class Config(StrictModel):
-    version: int = 1
+    version: int = CONFIG_VERSION
     project: ProjectConfig
     agent: AgentConfig = Field(default_factory=AgentConfig)
     automation: AutomationConfig = Field(default_factory=AutomationConfig)
@@ -86,6 +96,7 @@ class Config(StrictModel):
     commit: CommitConfig = Field(default_factory=CommitConfig)
     validation: ValidationConfig = Field(default_factory=ValidationConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    tool: ToolConfig = Field(default_factory=ToolConfig)
 
 
 def default_config(
@@ -118,6 +129,7 @@ def default_config(
         ),
         automation=AutomationConfig(refineWithAgent=agent),
         commit=CommitConfig(mode=commit_mode),
+        tool=ToolConfig(versionInitialized=__version__, versionMigrated=__version__),
     )
 
 

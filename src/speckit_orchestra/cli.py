@@ -12,10 +12,10 @@ import yaml
 
 from . import __version__
 from .adapters import ADAPTERS, get_adapter
-from .config import default_config, load_config, write_config
+from .config import config_path, default_config, load_config, write_config
 from .epics import write_epics
 from .feature import discover_feature_paths, load_feature_artifacts
-from .migration import migrate_project
+from .migration import CURRENT_CONFIG_VERSION, migrate_project
 from .opencode_discovery import OpencodeDiscovery, discover_opencode
 from .orchestrator import RunOptions, run_feature
 from .refinement import generate_epic_document
@@ -129,6 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor = sub.add_parser("doctor", help="Check environment readiness")
     doctor.add_argument("--agent", default=None)
+    doctor.add_argument("--config-dir", default=".spec-orchestra", help="Project orchestration directory")
     doctor.add_argument("--skip-smoke", action="store_true")
     doctor.set_defaults(func=cmd_doctor)
 
@@ -370,7 +371,7 @@ def cmd_migrate(args, root: Path) -> int:
 
 
 def cmd_doctor(args, root: Path) -> int:
-    config = load_config(root)
+    config = load_config(root, args.config_dir)
     if args.agent:
         config.agent.adapter = args.agent
         config.agent.command = args.agent
@@ -378,10 +379,12 @@ def cmd_doctor(args, root: Path) -> int:
     if adapter is None:
         print(f"error: unknown adapter {config.agent.adapter}", file=sys.stderr)
         return 2
-    checks = _generic_doctor_checks(root) + adapter.doctor(config, root, smoke=not args.skip_smoke)
+    checks = _version_doctor_checks(root, config, args.config_dir) + _generic_doctor_checks(root) + adapter.doctor(
+        config, root, smoke=not args.skip_smoke
+    )
     ok = True
     for check in checks:
-        marker = "ok" if check["ok"] else "fail"
+        marker = str(check.get("level") or ("ok" if check["ok"] else "fail"))
         print(f"[{marker}] {check['name']}: {check['detail']}")
         ok = ok and bool(check["ok"])
     return 0 if ok else 3
@@ -437,6 +440,176 @@ def _print_subprocess_output(result: subprocess.CompletedProcess[str]) -> None:
         print(result.stdout.strip())
     if result.stderr.strip():
         print(result.stderr.strip(), file=sys.stderr)
+
+
+def _version_doctor_checks(root: Path, config, config_dir: str, *, include_path: bool = True) -> list[dict[str, object]]:
+    current_version = _installed_version()
+    checks: list[dict[str, object]] = [
+        {
+            "name": "speckit-orchestra version",
+            "ok": True,
+            "detail": f"{current_version}; executable {Path(sys.argv[0]).resolve()}; Python {sys.executable}",
+        }
+    ]
+    checks.extend(_project_version_checks(root, config, config_dir, current_version))
+    if include_path:
+        checks.extend(_path_version_checks(current_version))
+    return checks
+
+
+def _project_version_checks(root: Path, config, config_dir: str, current_version: str) -> list[dict[str, object]]:
+    path = config_path(root, config_dir)
+    if not path.exists():
+        return [
+            {
+                "name": "Project config",
+                "ok": True,
+                "level": "warn",
+                "detail": f"not initialized; missing {relpath(path, root)}",
+            }
+        ]
+
+    checks: list[dict[str, object]] = []
+    if config.version > CURRENT_CONFIG_VERSION:
+        checks.append(
+            {
+                "name": "Project config schema",
+                "ok": False,
+                "detail": f"schema {config.version} is newer than supported schema {CURRENT_CONFIG_VERSION}",
+            }
+        )
+    elif config.version < CURRENT_CONFIG_VERSION:
+        checks.append(
+            {
+                "name": "Project config schema",
+                "ok": True,
+                "level": "warn",
+                "detail": f"schema {config.version}; current schema {CURRENT_CONFIG_VERSION}; run `sko migrate`",
+            }
+        )
+    else:
+        checks.append(
+            {
+                "name": "Project config schema",
+                "ok": True,
+                "detail": f"schema {config.version}; current schema {CURRENT_CONFIG_VERSION}",
+            }
+        )
+
+    initialized = config.tool.versionInitialized
+    migrated = config.tool.versionMigrated
+    migrated_at = config.tool.lastMigratedAt
+    detail = _project_metadata_detail(initialized, migrated, migrated_at)
+    if not migrated:
+        checks.append(
+            {
+                "name": "Project CLI metadata",
+                "ok": True,
+                "level": "warn",
+                "detail": f"{detail}; run `sko migrate` to record local CLI metadata",
+            }
+        )
+    elif _is_newer_version(current_version, migrated):
+        checks.append(
+            {
+                "name": "Project CLI metadata",
+                "ok": True,
+                "level": "warn",
+                "detail": f"{detail}; current CLI is {current_version}; run `sko migrate`",
+            }
+        )
+    else:
+        checks.append({"name": "Project CLI metadata", "ok": True, "detail": detail})
+    return checks
+
+
+def _project_metadata_detail(initialized: str | None, migrated: str | None, migrated_at: str | None) -> str:
+    parts = [
+        f"initialized {initialized}" if initialized else "initialized version not recorded",
+        f"last migrated {migrated}" if migrated else "migration version not recorded",
+    ]
+    if migrated_at:
+        parts.append(f"at {migrated_at}")
+    return "; ".join(parts)
+
+
+def _path_version_checks(current_version: str) -> list[dict[str, object]]:
+    checks: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for command in ("sko", "speckit-orchestra", "orchestra"):
+        path = shutil.which(command)
+        if path is None or path in seen:
+            continue
+        seen.add(path)
+        version = _version_from_executable(path)
+        if version is None:
+            checks.append(
+                {
+                    "name": f"PATH {command} version",
+                    "ok": True,
+                    "level": "warn",
+                    "detail": f"could not read version from {path}",
+                }
+            )
+        elif version != current_version:
+            checks.append(
+                {
+                    "name": f"PATH {command} version",
+                    "ok": True,
+                    "level": "warn",
+                    "detail": f"{version} at {path}; current CLI is {current_version}",
+                }
+            )
+        else:
+            checks.append({"name": f"PATH {command} version", "ok": True, "detail": f"{version} at {path}"})
+    if not checks:
+        checks.append(
+            {
+                "name": "PATH speckit-orchestra scripts",
+                "ok": True,
+                "level": "info",
+                "detail": "no sko, speckit-orchestra, or orchestra executable found on PATH",
+            }
+        )
+    return checks
+
+
+def _version_from_executable(path: str) -> str | None:
+    try:
+        result = subprocess.run(
+            [path, "--version"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    return _parse_version_output(result.stdout)
+
+
+def _parse_version_output(output: str) -> str | None:
+    parts = output.strip().split()
+    if not parts:
+        return None
+    return parts[-1]
+
+
+def _is_newer_version(version: str, other: str) -> bool:
+    version_key = _version_key(version)
+    other_key = _version_key(other)
+    if version_key is None or other_key is None:
+        return False
+    return version_key > other_key
+
+
+def _version_key(version: str) -> tuple[int, int, int] | None:
+    parts = version.split(".")
+    if len(parts) != 3 or not all(part.isdigit() for part in parts):
+        return None
+    return int(parts[0]), int(parts[1]), int(parts[2])
 
 
 def _resolve_feature_arg(args, root: Path, config) -> str:

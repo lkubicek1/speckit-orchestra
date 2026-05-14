@@ -10,12 +10,13 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from .config import Config, config_path, default_config
+from . import __version__
+from .config import CONFIG_VERSION, Config, config_path, default_config
 from .state import summarize
-from .utils import atomic_write_json, read_yaml, write_yaml
+from .utils import atomic_write_json, now_iso, read_yaml, write_yaml
 
 
-CURRENT_CONFIG_VERSION = 1
+CURRENT_CONFIG_VERSION = CONFIG_VERSION
 CURRENT_STATE_VERSION = 1
 
 
@@ -59,6 +60,7 @@ def migrate_project(
 
     backup_root = root / config_dir / "migrations" / _migration_id()
     orchestra_root = root / config_dir
+    migration_time = now_iso()
     _migrate_config(
         root,
         config_file,
@@ -68,6 +70,7 @@ def migrate_project(
         backup=backup,
         backup_root=backup_root,
         backup_anchor=orchestra_root,
+        migration_time=migration_time,
     )
     if result.errors:
         return result
@@ -96,6 +99,7 @@ def _migrate_config(
     backup: bool,
     backup_root: Path,
     backup_anchor: Path,
+    migration_time: str,
 ) -> None:
     try:
         raw = read_yaml(path)
@@ -116,7 +120,7 @@ def _migrate_config(
         )
         return
 
-    normalized, details, warnings = _normalize_config(root, raw, config_dir)
+    normalized, details, warnings = _normalize_config(root, raw, config_dir, migration_time=migration_time)
     result.warnings.extend(f"{path}: {warning}" for warning in warnings)
     try:
         config = Config.model_validate(normalized)
@@ -134,7 +138,13 @@ def _migrate_config(
     result.files.append(file_result)
 
 
-def _normalize_config(root: Path, raw: dict[str, Any], config_dir: str) -> tuple[dict[str, Any], list[str], list[str]]:
+def _normalize_config(
+    root: Path,
+    raw: dict[str, Any],
+    config_dir: str,
+    *,
+    migration_time: str,
+) -> tuple[dict[str, Any], list[str], list[str]]:
     defaults = default_config(root, config_dir=config_dir).model_dump(mode="json")
     normalized = copy.deepcopy(defaults)
     details: list[str] = []
@@ -167,6 +177,7 @@ def _normalize_config(root: Path, raw: dict[str, Any], config_dir: str) -> tuple
     if raw.get("version") != CURRENT_CONFIG_VERSION:
         details.append(f"set config version {CURRENT_CONFIG_VERSION}")
     normalized["version"] = CURRENT_CONFIG_VERSION
+    _normalize_tool_metadata(raw, normalized, details, migration_time)
 
     for key, value in defaults.items():
         if key == "version" or key in raw:
@@ -180,6 +191,30 @@ def _normalize_config(root: Path, raw: dict[str, Any], config_dir: str) -> tuple
             "project.orchestraRoot does not match --config-dir; migrating the selected config file in place"
         )
     return normalized, details, warnings
+
+
+def _normalize_tool_metadata(
+    raw: dict[str, Any],
+    normalized: dict[str, Any],
+    details: list[str],
+    migration_time: str,
+) -> None:
+    raw_tool = raw.get("tool") if isinstance(raw.get("tool"), dict) else {}
+    normalized["tool"] = normalized.get("tool") if isinstance(normalized.get("tool"), dict) else {}
+
+    initialized = raw_tool.get("versionInitialized")
+    normalized["tool"]["versionInitialized"] = initialized if isinstance(initialized, str) else None
+
+    needs_migration_record = (
+        raw.get("version") != CURRENT_CONFIG_VERSION
+        or not isinstance(raw.get("tool"), dict)
+        or raw_tool.get("versionMigrated") != __version__
+        or not raw_tool.get("lastMigratedAt")
+    )
+    if needs_migration_record:
+        normalized["tool"]["versionMigrated"] = __version__
+        normalized["tool"]["lastMigratedAt"] = migration_time
+        details.append(f"record tool migration version {__version__}")
 
 
 def _migrate_state(
