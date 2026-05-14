@@ -48,7 +48,7 @@ speckit-orchestra --help
 Install directly from a Git URL:
 
 ```bash
-uv tool install git+https://github.com/<owner>/speckit-orchestra.git
+uv tool install git+https://github.com/lkubicek1/speckit-orchestra.git
 ```
 
 The package exposes three equivalent commands:
