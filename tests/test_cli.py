@@ -42,6 +42,14 @@ def test_version_and_update_switches_parse() -> None:
     assert parser.parse_args(["--update"]).update is True
 
 
+def test_migrate_command_parse() -> None:
+    args = build_parser().parse_args(["migrate", "--dry-run", "--no-backup"])
+
+    assert args.command == "migrate"
+    assert args.dry_run is True
+    assert args.no_backup is True
+
+
 def test_discover_feature_paths_uses_spec_root(tmp_path: Path) -> None:
     feature = make_feature(tmp_path)
     (tmp_path / "specs" / "not-a-feature").mkdir()

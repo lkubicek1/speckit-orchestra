@@ -15,6 +15,7 @@ The MVP ships with an `opencode` CLI adapter and keeps the orchestration core ha
 - Retry validation failures once by default.
 - Maintain atomic `state.json`, append-only `events.jsonl`, lock files, and summary reports.
 - Support commit modes: `ask`, `auto`, and `never`.
+- Migrate initialized project artifacts after CLI upgrades with `sko migrate`.
 
 ## Requirements
 
@@ -142,6 +143,8 @@ Version and update helpers are available from any installed script name:
 ```bash
 sko --version
 sko --update
+sko migrate --dry-run
+sko migrate
 ```
 
 ## Commands
@@ -247,9 +250,13 @@ For `opencode`, doctor verifies command availability, attempts `opencode --versi
 ```bash
 sko --version
 sko --update
+sko migrate --dry-run
+sko migrate
 ```
 
 `--version` prints the installed package version. `--update` runs `python -m pip install --upgrade speckit-orchestra` in the current Python environment and reports the version before and after the upgrade.
+
+Run `sko migrate` from an initialized project after updating the CLI. It normalizes `.spec-orchestra/config.yaml` to the current schema, refreshes runtime state summaries, and writes backups under `.spec-orchestra/migrations/<timestamp>/` before changing files. Use `--dry-run` to preview changes, `--no-backup` to skip backups, or `--config-dir <path>` for a non-default orchestration directory.
 
 ## opencode Model Configuration
 

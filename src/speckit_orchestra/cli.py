@@ -15,6 +15,7 @@ from .adapters import ADAPTERS, get_adapter
 from .config import default_config, load_config, write_config
 from .epics import write_epics
 from .feature import discover_feature_paths, load_feature_artifacts
+from .migration import migrate_project
 from .opencode_discovery import OpencodeDiscovery, discover_opencode
 from .orchestrator import RunOptions, run_feature
 from .refinement import generate_epic_document
@@ -119,6 +120,12 @@ def build_parser() -> argparse.ArgumentParser:
     report = sub.add_parser("report", help="Generate and print a feature report")
     report.add_argument("feature", nargs="?")
     report.set_defaults(func=cmd_report)
+
+    migrate = sub.add_parser("migrate", help="Migrate project-local speckit-orchestra artifacts")
+    migrate.add_argument("--config-dir", default=".spec-orchestra", help="Project orchestration directory")
+    migrate.add_argument("--dry-run", action="store_true", help="Show migration changes without writing files")
+    migrate.add_argument("--no-backup", action="store_true", help="Do not back up changed files before writing")
+    migrate.set_defaults(func=cmd_migrate)
 
     doctor = sub.add_parser("doctor", help="Check environment readiness")
     doctor.add_argument("--agent", default=None)
@@ -332,6 +339,33 @@ def cmd_report(args, root: Path) -> int:
     path = write_summary_report(feature_dir, doc, state)
     print(render_summary_report(doc, state))
     print(f"Report written to {relpath(path, root)}")
+    return 0
+
+
+def cmd_migrate(args, root: Path) -> int:
+    result = migrate_project(root, config_dir=args.config_dir, dry_run=args.dry_run, backup=not args.no_backup)
+    for warning in result.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    if not result.ok:
+        for error in result.errors:
+            print(f"error: {error}", file=sys.stderr)
+        return 2
+
+    changed = [item for item in result.files if item.changed]
+    action = "would update" if args.dry_run else "updated"
+    for item in changed:
+        print(f"{action}: {relpath(item.path, root)}")
+        for detail in item.details:
+            print(f"  - {detail}")
+        if item.backup is not None:
+            print(f"  backup: {relpath(item.backup, root)}")
+
+    if not changed:
+        print("Project artifacts are already up to date.")
+    elif args.dry_run:
+        print("Dry run complete; no files were changed.")
+    else:
+        print("Migration complete.")
     return 0
 
 
