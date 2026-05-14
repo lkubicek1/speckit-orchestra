@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import tomllib
 from argparse import Namespace
 from pathlib import Path
 
 import pytest
 
+import speckit_orchestra
 from speckit_orchestra.cli import _menu_lines, _resolve_feature_arg, build_parser
 from speckit_orchestra.config import default_config
 from speckit_orchestra.feature import discover_feature_paths
@@ -40,6 +42,12 @@ def test_version_and_update_switches_parse() -> None:
 
     assert parser.parse_args(["--version"]).version is True
     assert parser.parse_args(["--update"]).update is True
+
+
+def test_declared_versions_match() -> None:
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
+
+    assert speckit_orchestra.__version__ == project["version"]
 
 
 def test_migrate_command_parse() -> None:

@@ -360,6 +360,15 @@ Run the CLI from source:
 uv run speckit-orchestra --help
 ```
 
+### Versioning requirement
+
+Before completing any change that affects the installed package, bump the version in both places:
+
+- `pyproject.toml` `[project].version`
+- `src/speckit_orchestra/__init__.py` `__version__`
+
+This is mandatory for CLI behavior, command flags, prompts, adapters, validation rules, migrations, generated artifact schemas, runtime behavior, dependency changes, packaging metadata, and user-facing documentation that describes installed behavior. If unsure, use a patch bump.
+
 Build a distributable package:
 
 ```bash
