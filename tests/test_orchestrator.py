@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import shlex
+import sys
 from pathlib import Path
 
 from speckit_orchestra.config import default_config
+from speckit_orchestra.epics import Approval, Epic, Scope, Validation
 from speckit_orchestra.orchestrator import (
+    RunOptions,
     _changed_paths_since_snapshot,
     _changed_paths_since_status,
     _dirty_paths_for_run_preflight,
     _no_changes_blocker,
+    _run_validation,
     _snapshot_status_paths,
 )
 
@@ -106,3 +111,31 @@ def test_no_changes_blocker_without_validation_stays_no_changes(tmp_path: Path) 
     assert blocker["category"] == "no_changes"
     assert "Nothing to update." in blocker["message"]
     assert blocker["evidence"] == [".spec-orchestra/features/001-demo/runs/EPIC-001/attempt-001/stdout.log"]
+
+
+def test_validation_command_times_out(tmp_path: Path) -> None:
+    config = default_config(tmp_path)
+    config.validation.commandTimeoutMs = 50
+    attempt_dir = tmp_path / "attempt"
+    epic = Epic(
+        id="EPIC-001",
+        title="Timeout validation",
+        goal="Exercise validation timeout handling.",
+        tasks=["T001"],
+        dependencies=[],
+        risk="low",
+        parallelSafe=False,
+        approval=Approval(required=False, reason=None),
+        scope=Scope(include=["src/**"], exclude=[]),
+        acceptance=["Validation timeout is reported."],
+        validation=Validation(commands=[f"{shlex.quote(sys.executable)} -c 'import time; print(\"started\", flush=True); time.sleep(5)'"]),
+        stopConditions=["Validation cannot complete."],
+    )
+
+    ok, summary = _run_validation(tmp_path, config, epic, attempt_dir, RunOptions())
+
+    assert ok is False
+    assert "started" in summary
+    assert "timed out after 50ms" in summary
+    assert "exit code:" in summary
+    assert "timed out after 50ms" in (attempt_dir / "validation.log").read_text(encoding="utf-8")

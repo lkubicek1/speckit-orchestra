@@ -39,6 +39,7 @@ def test_migrate_normalizes_config_and_backs_up_original(tmp_path: Path) -> None
     assert config.agent.mode == "cli"
     assert config.agent.timeoutMs == 1_800_000
     assert config.execution.validationRetries == 5
+    assert config.validation.commandTimeoutMs == 600_000
     assert config.tool.versionInitialized is None
     assert config.tool.versionMigrated == speckit_orchestra.__version__
     assert config.tool.lastMigratedAt is not None

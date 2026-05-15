@@ -323,6 +323,16 @@ execution:
 
 `maxRetries` controls generic retryable blockers such as no-change attempts. `validationRetries` controls retries after configured validation/test commands fail, which is useful for overnight runs where the agent should keep iterating on failing tests before blocking.
 
+Validation command settings live under `validation`:
+
+```yaml
+validation:
+  commandTimeoutMs: 600000
+  globalCommands: []
+```
+
+`commandTimeoutMs` applies to each configured validation command, regardless of framework or language. Timed-out commands are killed, logged in `validation.log`, and treated as validation failures unless the epic explicitly allows expected failures.
+
 ### `adapters`
 
 Lists bundled adapters.

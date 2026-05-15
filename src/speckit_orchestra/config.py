@@ -9,7 +9,7 @@ from . import __version__
 from .utils import read_yaml, write_yaml
 
 
-CONFIG_VERSION = 3
+CONFIG_VERSION = 4
 
 
 DEFAULT_COMMIT_TEMPLATE = """feat({featureId}): implement {epicId} {epicTitle}
@@ -72,6 +72,7 @@ class CommitConfig(StrictModel):
 
 class ValidationConfig(StrictModel):
     globalCommands: list[str] = Field(default_factory=list)
+    commandTimeoutMs: int = 600_000
     blockOnForbiddenPaths: bool = True
     blockOnUntrackedFiles: bool = False
 

@@ -3,7 +3,9 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import json
+import os
 import shlex
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -33,6 +35,7 @@ class RunOptions:
     global_validation: bool = False
     max_retries: int | None = None
     validation_retries: int | None = None
+    validation_timeout_ms: int | None = None
     commit_mode: str | None = None
     agent: str | None = None
     mode: str | None = None
@@ -51,6 +54,8 @@ def run_feature(root, feature: str, config: Config, options: RunOptions) -> int:
         config.execution.maxRetries = options.max_retries
     if options.validation_retries is not None:
         config.execution.validationRetries = options.validation_retries
+    if options.validation_timeout_ms is not None:
+        config.validation.commandTimeoutMs = options.validation_timeout_ms
     if options.commit_mode:
         config.commit.mode = options.commit_mode
     if options.continue_on_blocker:
@@ -291,18 +296,13 @@ def _run_validation(root, config: Config, epic: Epic, attempt_dir, options: RunO
     ok = True
     for command in commands:
         log_parts.append(f"$ {command}\n")
-        result = subprocess.run(
-            command,
-            cwd=root,
-            shell=True,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        result = _run_validation_command(command, root, config.validation.commandTimeoutMs)
         log_parts.append(result.stdout)
         log_parts.append(result.stderr)
+        if result.timed_out:
+            log_parts.append(f"\ntimed out after {config.validation.commandTimeoutMs}ms\n")
         log_parts.append(f"\nexit code: {result.returncode}\n")
-        if result.returncode != 0:
+        if result.returncode != 0 or result.timed_out:
             if epic.validation.expectedFailureAllowed:
                 log_parts.append("failure accepted because expectedFailureAllowed is true\n")
             else:
@@ -310,6 +310,47 @@ def _run_validation(root, config: Config, epic: Epic, attempt_dir, options: RunO
     summary = "".join(log_parts)
     atomic_write_text(attempt_dir / "validation.log", summary)
     return ok, summary
+
+
+@dataclass(frozen=True)
+class ValidationCommandResult:
+    returncode: int
+    stdout: str
+    stderr: str
+    timed_out: bool = False
+
+
+def _run_validation_command(command: str, root, timeout_ms: int) -> ValidationCommandResult:
+    process = subprocess.Popen(
+        command,
+        cwd=root,
+        shell=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=max(timeout_ms, 1) / 1000)
+        return ValidationCommandResult(process.returncode, stdout, stderr)
+    except subprocess.TimeoutExpired:
+        _terminate_validation_process(process)
+        stdout, stderr = process.communicate()
+        return ValidationCommandResult(process.returncode if process.returncode is not None else -signal.SIGTERM, stdout, stderr, True)
+
+
+def _terminate_validation_process(process: subprocess.Popen[str]) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except Exception:
+        process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except Exception:
+            process.kill()
 
 
 def _maybe_commit(root, config: Config, spec_path: str, epic: Epic, changed: list[str], validation_summary: str) -> str | None:

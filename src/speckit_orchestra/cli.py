@@ -155,6 +155,7 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--commit", choices=["auto", "ask", "never"])
     parser.add_argument("--max-retries", type=int)
     parser.add_argument("--validation-retries", type=int)
+    parser.add_argument("--validation-timeout-ms", type=int)
     parser.add_argument("--only")
     parser.add_argument("--from", dest="from_epic")
     parser.add_argument("--dry-run", action="store_true")
@@ -278,6 +279,7 @@ def cmd_run(args, root: Path) -> int:
             global_validation=args.global_validation,
             max_retries=args.max_retries,
             validation_retries=args.validation_retries,
+            validation_timeout_ms=args.validation_timeout_ms,
             commit_mode=args.commit,
             agent=args.agent,
             mode=args.mode,
@@ -300,6 +302,7 @@ def cmd_resume(args, root: Path) -> int:
             no_tests=args.no_tests,
             max_retries=args.max_retries,
             validation_retries=args.validation_retries,
+            validation_timeout_ms=args.validation_timeout_ms,
             commit_mode=args.commit,
             force_unlock=args.force_unlock,
             resume=True,
