@@ -88,6 +88,18 @@ Stop and report a blocker if any of these occur:
 
 {_bullets(epic.stopConditions)}
 
+## Spec Kit Implementation Discipline
+
+Follow the relevant parts of the current Spec Kit implementation workflow, adapted to this single-epic run:
+
+- Read the source-of-truth artifacts before editing, including optional design artifacts such as research, data model, contracts, quickstart, and constitution files when present.
+- Use `tasks.md` to infer task phase, ordering, dependencies, and test-first expectations for the in-scope task IDs only.
+- If tests are in scope, write or update them before the corresponding implementation where practical, and confirm the intended failure before making them pass when feasible.
+- Keep project setup and ignore-file updates limited to changes required by this epic and allowed by the path scope.
+- Do not run interactive checklist prompts; if an incomplete checklist or hook blocks safe implementation, report it as a blocker.
+- Do not mark tasks complete in `tasks.md` unless explicitly instructed to modify Spec Kit source artifacts.
+- Validate completion against the epic acceptance criteria and the relevant Spec Kit plan/spec context, not just against the test command exit status.
+
 ## Rules
 
 - Implement only this epic.

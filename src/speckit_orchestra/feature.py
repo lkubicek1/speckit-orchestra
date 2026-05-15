@@ -51,6 +51,9 @@ def load_feature_artifacts(root: Path, feature: str) -> FeatureArtifacts:
     contracts = path / "contracts"
     if contracts.exists():
         optional.extend(sorted(p for p in contracts.rglob("*") if p.is_file()))
+    constitution = root / ".specify" / "memory" / "constitution.md"
+    if constitution.exists():
+        optional.append(constitution)
     return FeatureArtifacts(
         id=path.name,
         path=path,
