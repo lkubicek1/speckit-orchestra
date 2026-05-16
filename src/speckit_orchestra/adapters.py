@@ -58,14 +58,24 @@ class OpencodeCliAdapter(AgentHarness):
         if not command_path:
             return checks
 
-        version = subprocess.run(
-            [command, "--version"],
-            cwd=root,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=15,
-        )
+        try:
+            version = subprocess.run(
+                [command_path, "--version"],
+                cwd=root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=15,
+            )
+        except OSError as exc:
+            checks.append(
+                {
+                    "name": "opencode version",
+                    "ok": False,
+                    "detail": f"failed to start {command_path}: {exc}",
+                }
+            )
+            return checks
         checks.append(
             {
                 "name": "opencode version",
@@ -79,7 +89,7 @@ class OpencodeCliAdapter(AgentHarness):
             invocation = self.build_invocation(config, root, prompt)
             try:
                 result = subprocess.run(
-                    [invocation.command, *invocation.args],
+                    [_resolve_command(invocation.command), *invocation.args],
                     input=invocation.stdin,
                     cwd=invocation.cwd,
                     text=True,
@@ -118,7 +128,7 @@ class OpencodeCliAdapter(AgentHarness):
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             result = subprocess.run(
-                [invocation.command, *invocation.args],
+                [_resolve_command(invocation.command), *invocation.args],
                 input=invocation.stdin,
                 cwd=invocation.cwd,
                 text=True,
@@ -170,6 +180,10 @@ class OpencodeCliAdapter(AgentHarness):
 
 
 ADAPTERS: dict[str, AgentHarness] = {"opencode": OpencodeCliAdapter()}
+
+
+def _resolve_command(command: str) -> str:
+    return shutil.which(command) or command
 
 
 def get_adapter(name: str) -> AgentHarness | None:

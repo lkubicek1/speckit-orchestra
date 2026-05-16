@@ -24,22 +24,23 @@ class OpencodeDiscovery:
 
 
 def discover_opencode(root: Path, command: str = "opencode") -> OpencodeDiscovery:
-    if shutil.which(command) is None:
+    command_path = shutil.which(command)
+    if command_path is None:
         return OpencodeDiscovery(False, command, errors=[f"{command!r} was not found on PATH"])
 
     errors: list[str] = []
-    models_output, model_error = _run(command, ["models"], root)
+    models_output, model_error = _run(command_path, ["models"], root)
     if model_error:
         errors.append(model_error)
     models = parse_models(models_output)
 
-    providers_output, provider_error = _run(command, ["providers", "list"], root)
+    providers_output, provider_error = _run(command_path, ["providers", "list"], root)
     if provider_error:
         errors.append(provider_error)
     provider_labels = parse_provider_labels(providers_output)
     providers = sorted({model.split("/", 1)[0] for model in models} | set(provider_labels))
 
-    agents_output, agent_error = _run(command, ["agent", "list"], root)
+    agents_output, agent_error = _run(command_path, ["agent", "list"], root)
     if agent_error:
         errors.append(agent_error)
     agents = parse_agents(agents_output)
@@ -88,6 +89,8 @@ def _run(command: str, args: list[str], root: Path) -> tuple[str, str | None]:
         )
     except subprocess.TimeoutExpired:
         return "", f"opencode {' '.join(args)} timed out"
+    except OSError as exc:
+        return "", f"opencode {' '.join(args)} failed to start: {exc}"
     if result.returncode != 0:
         return result.stdout, (result.stderr or result.stdout).strip() or f"opencode {' '.join(args)} failed"
     return result.stdout, None
