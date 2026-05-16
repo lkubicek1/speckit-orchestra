@@ -111,6 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--no-tests", action="store_true")
     resume.add_argument("--max-retries", type=int)
     resume.add_argument("--validation-retries", type=int)
+    resume.add_argument("--validation-timeout-ms", type=int)
     resume.add_argument("--commit", choices=["auto", "ask", "never"])
     resume.add_argument("--force-unlock", action="store_true")
     resume.set_defaults(func=cmd_resume)
