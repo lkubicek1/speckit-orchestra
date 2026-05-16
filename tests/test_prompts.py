@@ -4,7 +4,7 @@ from pathlib import Path
 
 from speckit_orchestra.epics import Approval, Epic, Scope, Validation
 from speckit_orchestra.feature import FeatureArtifacts, Task, artifact_relpaths, load_feature_artifacts
-from speckit_orchestra.prompts import render_epic_prompt
+from speckit_orchestra.prompts import render_attempt_report, render_epic_prompt
 
 
 def test_epic_prompt_includes_spec_kit_implementation_discipline(tmp_path: Path) -> None:
@@ -65,3 +65,34 @@ def test_feature_artifacts_include_constitution_when_present(tmp_path: Path) -> 
     artifacts = load_feature_artifacts(tmp_path, "specs/001-demo")
 
     assert ".specify/memory/constitution.md" in artifact_relpaths(tmp_path, artifacts)
+
+
+def test_attempt_report_can_label_previous_validation_failure() -> None:
+    epic = Epic(
+        id="EPIC-001",
+        title="Build widget",
+        goal="Implement the widget flow.",
+        tasks=["T001"],
+        dependencies=[],
+        risk="medium",
+        parallelSafe=False,
+        approval=Approval(required=False, reason=None),
+        scope=Scope(include=["src/**"], exclude=[]),
+        acceptance=["Widget flow works."],
+        validation=Validation(commands=["pytest"]),
+        stopConditions=["Requirements conflict."],
+    )
+
+    report = render_attempt_report(
+        epic=epic,
+        attempt=2,
+        adapter_status="complete",
+        exit_code=0,
+        changed_files=[],
+        validation_summary="previous failure",
+        blocker=None,
+        validation_heading="Previous Validation Failure",
+    )
+
+    assert "## Previous Validation Failure" in report
+    assert "previous failure" in report

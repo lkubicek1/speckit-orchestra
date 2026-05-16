@@ -144,6 +144,7 @@ def render_attempt_report(
     changed_files: list[str],
     validation_summary: str,
     blocker: dict[str, object] | None,
+    validation_heading: str = "Validation",
 ) -> str:
     return f"""# {epic.id} Attempt {attempt}
 
@@ -155,7 +156,7 @@ def render_attempt_report(
 
 {_bullets(changed_files) if changed_files else "- None"}
 
-## Validation
+## {validation_heading}
 
 ```text
 {validation_summary or "No validation was run."}

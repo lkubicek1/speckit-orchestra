@@ -4,6 +4,7 @@ import shlex
 import sys
 from pathlib import Path
 
+from speckit_orchestra import git as git_utils
 from speckit_orchestra.config import default_config
 from speckit_orchestra.epics import Approval, Epic, Scope, Validation
 from speckit_orchestra.orchestrator import (
@@ -14,6 +15,7 @@ from speckit_orchestra.orchestrator import (
     _no_changes_blocker,
     _run_validation,
     _snapshot_status_paths,
+    _scope_blocker,
 )
 
 
@@ -87,6 +89,7 @@ def test_no_changes_blocker_preserves_validation_context_and_stdout(tmp_path: Pa
 
     blocker = _no_changes_blocker(
         tmp_path,
+        "specs/001-demo",
         attempt_dir,
         "unit tests failed",
         [".spec-orchestra/features/001-demo/runs/EPIC-001/attempt-001/validation.log"],
@@ -99,6 +102,7 @@ def test_no_changes_blocker_preserves_validation_context_and_stdout(tmp_path: Pa
         ".spec-orchestra/features/001-demo/runs/EPIC-001/attempt-001/validation.log",
         ".spec-orchestra/features/001-demo/runs/EPIC-001/attempt-002/stdout.log",
     ]
+    assert "--allow-dirty" in blocker["suggestedNextAction"]
 
 
 def test_no_changes_blocker_without_validation_stays_no_changes(tmp_path: Path) -> None:
@@ -106,11 +110,56 @@ def test_no_changes_blocker_without_validation_stays_no_changes(tmp_path: Path) 
     attempt_dir.mkdir(parents=True)
     (attempt_dir / "stdout.log").write_text("Nothing to update.\n", encoding="utf-8")
 
-    blocker = _no_changes_blocker(tmp_path, attempt_dir)
+    blocker = _no_changes_blocker(tmp_path, "specs/001-demo", attempt_dir)
 
     assert blocker["category"] == "no_changes"
     assert "Nothing to update." in blocker["message"]
     assert blocker["evidence"] == [".spec-orchestra/features/001-demo/runs/EPIC-001/attempt-001/stdout.log"]
+
+
+def test_scope_blocker_can_be_disabled_by_config(tmp_path: Path) -> None:
+    config = default_config(tmp_path)
+    epic = Epic(
+        id="EPIC-001",
+        title="Scoped work",
+        goal="Exercise scope config.",
+        tasks=["T001"],
+        dependencies=[],
+        risk="low",
+        parallelSafe=False,
+        approval=Approval(required=False, reason=None),
+        scope=Scope(include=["src/**"], exclude=["tests/**"]),
+        acceptance=["Scope is checked."],
+        validation=Validation(manualChecks=["Manual check."], expectedFailureAllowed=True),
+        stopConditions=["Scope cannot be checked."],
+    )
+
+    assert _scope_blocker(epic, ["tests/example.test.ts"], config) is not None
+
+    config.validation.blockOnForbiddenPaths = False
+
+    assert _scope_blocker(epic, ["tests/example.test.ts"], config) is None
+
+
+def test_diff_patch_can_be_limited_to_attempt_changed_files(tmp_path: Path) -> None:
+    git_utils.git(["init"], tmp_path)
+    (tmp_path / "kept.txt").write_text("before\n", encoding="utf-8")
+    (tmp_path / "ignored.txt").write_text("before\n", encoding="utf-8")
+    git_utils.git(["add", "kept.txt", "ignored.txt"], tmp_path)
+    git_utils.git(
+        ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"],
+        tmp_path,
+    )
+
+    (tmp_path / "kept.txt").write_text("after\n", encoding="utf-8")
+    (tmp_path / "ignored.txt").write_text("after\n", encoding="utf-8")
+    (tmp_path / "new.txt").write_text("new\n", encoding="utf-8")
+
+    patch = git_utils.diff_patch(tmp_path, ["kept.txt", "new.txt"])
+
+    assert "kept.txt" in patch
+    assert "new.txt" in patch
+    assert "ignored.txt" not in patch
 
 
 def test_validation_command_times_out(tmp_path: Path) -> None:

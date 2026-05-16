@@ -209,23 +209,28 @@ def _run_epic(root, feature: str, config: Config, doc, state, feature_dir, epic:
             },
         )
         if result.status != "complete":
-            _write_attempt_result(attempt_dir, epic, attempt, result.status, result.exit_code, [], "", result.blocker)
+            _write_attempt_result(config, attempt_dir, epic, attempt, result.status, result.exit_code, [], "", result.blocker)
             _mark_blocked_from_result(state, feature_dir, epic.id, result.blocker or _blocker("agent_error", result.summary))
             return 3
 
         changed = _attempt_changed_files(root, config, doc.feature.id, before_snapshot)
         atomic_write_text(attempt_dir / "changed-files.txt", "\n".join(changed) + ("\n" if changed else ""))
-        atomic_write_text(attempt_dir / "diff.patch", git.diff_patch(root))
+        if config.logging.preserveDiffs:
+            atomic_write_text(attempt_dir / "diff.patch", git.diff_patch(root, changed))
 
-        blocker = _scope_blocker(epic, changed)
+        blocker = _scope_blocker(epic, changed, config)
+        if not blocker and config.validation.blockOnUntrackedFiles:
+            blocker = _untracked_files_blocker(root, changed)
         if blocker:
-            _write_attempt_result(attempt_dir, epic, attempt, result.status, result.exit_code, changed, "", blocker)
+            _write_attempt_result(config, attempt_dir, epic, attempt, result.status, result.exit_code, changed, "", blocker)
             _mark_blocked_from_result(state, feature_dir, epic.id, blocker)
             return 1
 
         if not changed and not _allows_no_changes(epic):
-            blocker = _no_changes_blocker(root, attempt_dir, validation_failure, validation_failure_evidence)
+            blocker = _no_changes_blocker(root, feature, attempt_dir, validation_failure, validation_failure_evidence)
+            validation_heading = "Previous Validation Failure" if validation_failure else "Validation"
             _write_attempt_result(
+                config,
                 attempt_dir,
                 epic,
                 attempt,
@@ -234,6 +239,7 @@ def _run_epic(root, feature: str, config: Config, doc, state, feature_dir, epic:
                 changed,
                 validation_failure or "",
                 blocker,
+                validation_heading=validation_heading,
             )
             if attempt < general_max_attempts:
                 validation_failure = blocker["message"]
@@ -249,10 +255,10 @@ def _run_epic(root, feature: str, config: Config, doc, state, feature_dir, epic:
             blocker = _blocker(
                 "validation_failed",
                 f"Validation failed for {epic.id} attempt {attempt}.",
-                "Inspect validation.log, fix the cause, then run `speckit-orchestra resume`.",
+                _resume_with_preserved_changes_action(feature),
                 [relpath(attempt_dir / "validation.log", root)],
             )
-            _write_attempt_result(attempt_dir, epic, attempt, result.status, result.exit_code, changed, validation_summary, blocker)
+            _write_attempt_result(config, attempt_dir, epic, attempt, result.status, result.exit_code, changed, validation_summary, blocker)
             if attempt < validation_max_attempts:
                 validation_failure = validation_summary
                 validation_failure_evidence = list(blocker.get("evidence", []))
@@ -273,7 +279,7 @@ def _run_epic(root, feature: str, config: Config, doc, state, feature_dir, epic:
         state["currentEpic"] = None
         save_state(feature_dir, state)
         append_event(feature_dir, "epic.completed", epicId=epic.id, attempt=attempt)
-        _write_attempt_result(attempt_dir, epic, attempt, result.status, result.exit_code, changed, validation_summary, None)
+        _write_attempt_result(config, attempt_dir, epic, attempt, result.status, result.exit_code, changed, validation_summary, None)
         print(progress_label("Completed", position, total, epic.id, epic.title))
         return 0
 
@@ -379,13 +385,30 @@ def _short_validation(text: str) -> str:
     return "\n".join(lines[-20:]) or "No automated validation run."
 
 
-def _scope_blocker(epic: Epic, changed: list[str]) -> dict[str, object] | None:
+def _scope_blocker(epic: Epic, changed: list[str], config: Config) -> dict[str, object] | None:
+    if not config.validation.blockOnForbiddenPaths:
+        return None
     for path in changed:
         if _matches_any(path, epic.scope.exclude):
             return _blocker("scope_violation", f"Forbidden path changed: {path}", "Revert or move the change, then resume.")
         if not _matches_any(path, epic.scope.include):
             return _blocker("scope_violation", f"Changed path is outside scope.include: {path}", "Update epics.yaml scope or revert the out-of-scope change.")
     return None
+
+
+def _untracked_files_blocker(root, changed: list[str]) -> dict[str, object] | None:
+    untracked = {line[3:] for line in git.status_porcelain(root).splitlines() if line.startswith("?? ")}
+    blocked = sorted(path for path in changed if path in untracked)
+    if not blocked:
+        return None
+    shown = ", ".join(blocked[:5])
+    if len(blocked) > 5:
+        shown += f", and {len(blocked) - 5} more"
+    return _blocker(
+        "untracked_files",
+        f"Untracked changed files are blocked by validation.blockOnUntrackedFiles: {shown}",
+        "Track, ignore, or remove the untracked files, then resume.",
+    )
 
 
 def _matches_any(path: str, patterns: list[str]) -> bool:
@@ -494,6 +517,7 @@ def _allows_no_changes(epic: Epic) -> bool:
 
 def _no_changes_blocker(
     root,
+    feature: str,
     attempt_dir,
     validation_failure: str | None = None,
     validation_failure_evidence: list[str] | None = None,
@@ -509,7 +533,7 @@ def _no_changes_blocker(
         return _blocker(
             "validation_failed",
             message,
-            "Inspect validation.log and stdout.log, clarify the failing requirement, then resume.",
+            _resume_with_preserved_changes_action(feature),
             evidence,
         )
 
@@ -536,7 +560,19 @@ def _stdout_rationale(stdout_path) -> str | None:
     return text[:500]
 
 
-def _write_attempt_result(attempt_dir, epic, attempt, adapter_status, exit_code, changed, validation_summary, blocker) -> None:
+def _write_attempt_result(
+    config: Config,
+    attempt_dir,
+    epic,
+    attempt,
+    adapter_status,
+    exit_code,
+    changed,
+    validation_summary,
+    blocker,
+    *,
+    validation_heading: str = "Validation",
+) -> None:
     atomic_write_json(
         attempt_dir / "result.json",
         {
@@ -559,7 +595,32 @@ def _write_attempt_result(attempt_dir, epic, attempt, adapter_status, exit_code,
             changed_files=changed,
             validation_summary=validation_summary,
             blocker=blocker,
+            validation_heading=validation_heading,
         ),
+    )
+    _prune_attempt_artifacts(config, attempt_dir)
+
+
+def _prune_attempt_artifacts(config: Config, attempt_dir) -> None:
+    if not config.logging.preserveStdout:
+        _unlink_if_exists(attempt_dir / "stdout.log")
+    if not config.logging.preserveStderr:
+        _unlink_if_exists(attempt_dir / "stderr.log")
+    if not config.logging.preserveDiffs:
+        _unlink_if_exists(attempt_dir / "diff.patch")
+
+
+def _unlink_if_exists(path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _resume_with_preserved_changes_action(feature: str) -> str:
+    return (
+        "Inspect the failed attempt, keep or fix the preserved changes, then run "
+        f"`speckit-orchestra resume {feature} --allow-dirty`; or clean/revert them before resuming without `--allow-dirty`."
     )
 
 

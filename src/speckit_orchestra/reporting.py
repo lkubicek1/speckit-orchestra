@@ -10,6 +10,7 @@ def render_summary_report(doc: EpicDocument, state: dict[str, object]) -> str:
     epics_state = state.get("epics", {}) if isinstance(state.get("epics"), dict) else {}
     completed: list[str] = []
     blocked: list[str] = []
+    blocked_actions: list[str] = []
     pending: list[str] = []
     for epic in doc.epics:
         item = epics_state.get(epic.id, {}) if isinstance(epics_state, dict) else {}
@@ -21,6 +22,9 @@ def render_summary_report(doc: EpicDocument, state: dict[str, object]) -> str:
         elif status == "blocked":
             blocker = item.get("blocker", {}) if isinstance(item, dict) else {}
             reason = blocker.get("message", "blocked") if isinstance(blocker, dict) else "blocked"
+            action = blocker.get("suggestedNextAction") if isinstance(blocker, dict) else None
+            if isinstance(action, str) and action:
+                blocked_actions.append(action)
             blocked.append(f"{line}: {reason}")
         else:
             pending.append(line)
@@ -29,7 +33,7 @@ def render_summary_report(doc: EpicDocument, state: dict[str, object]) -> str:
     if state.get("status") == "complete":
         next_action = "Feature orchestration is complete."
     elif blocked:
-        next_action = "Resolve the blocker, then run `speckit-orchestra resume {}`.".format(doc.feature.path)
+        next_action = blocked_actions[0] if blocked_actions else "Resolve the blocker, then run `speckit-orchestra resume {}`.".format(doc.feature.path)
 
     return f"""# speckit-orchestra Summary
 

@@ -321,7 +321,7 @@ execution:
   validationRetries: 5
 ```
 
-`maxRetries` controls generic retryable blockers such as no-change attempts. `validationRetries` controls retries after configured validation/test commands fail, which is useful for overnight runs where the agent should keep iterating on failing tests before blocking.
+`maxRetries` controls generic retryable blockers such as no-change attempts. `validationRetries` controls retries after configured validation/test commands fail, which is useful for overnight runs where the agent should keep iterating on failing tests before blocking. If a validation retry makes no changes, it is treated as a no-change blocker and uses the `maxRetries` budget so orchestra does not keep rerunning an agent that has already stopped on a scope or requirements conflict.
 
 Validation command settings live under `validation`:
 
@@ -329,9 +329,24 @@ Validation command settings live under `validation`:
 validation:
   commandTimeoutMs: 600000
   globalCommands: []
+  blockOnForbiddenPaths: true
+  blockOnUntrackedFiles: false
 ```
 
 `commandTimeoutMs` applies to each configured validation command, regardless of framework or language. Timed-out commands are killed, logged in `validation.log`, and treated as validation failures unless the epic explicitly allows expected failures.
+
+`blockOnForbiddenPaths` enforces each epic's include/exclude scope. `blockOnUntrackedFiles` can additionally block newly created files even when they are otherwise in scope.
+
+Runtime log preservation settings live under `logging`:
+
+```yaml
+logging:
+  preserveStdout: true
+  preserveStderr: true
+  preserveDiffs: true
+```
+
+When `preserveDiffs` is enabled, each attempt's `diff.patch` includes only files detected as changed by that attempt. Disable these flags to prune the corresponding attempt artifacts after `result.json` and `result.md` are written.
 
 ### `adapters`
 

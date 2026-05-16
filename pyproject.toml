@@ -1,6 +1,6 @@
 [project]
 name = "speckit-orchestra"
-version = "0.4.3"
+version = "0.4.4"
 description = "CLI-first orchestration for Spec Kit task execution through AI coding agent CLIs."
 readme = "README.md"
 requires-python = ">=3.11"

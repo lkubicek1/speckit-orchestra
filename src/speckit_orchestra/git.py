@@ -62,10 +62,21 @@ def changed_files(cwd: Path) -> list[str]:
     return sorted(set(files))
 
 
-def diff_patch(cwd: Path) -> str:
-    result = git(["diff", "--binary", "HEAD"], cwd, check=False)
-    patch = result.stdout if result.returncode == 0 else git(["diff", "--binary"], cwd, check=False).stdout
+def diff_patch(cwd: Path, files: list[str] | None = None) -> str:
+    if files is None:
+        result = git(["diff", "--binary", "HEAD"], cwd, check=False)
+        patch = result.stdout if result.returncode == 0 else git(["diff", "--binary"], cwd, check=False).stdout
+        selected = None
+    else:
+        selected = sorted(set(files))
+        if not selected:
+            return ""
+        result = git(["diff", "--binary", "HEAD", "--", *selected], cwd, check=False)
+        patch = result.stdout if result.returncode == 0 else ""
+
     untracked = [line[3:] for line in status_porcelain(cwd).splitlines() if line.startswith("?? ")]
+    if selected is not None:
+        untracked = [path for path in untracked if path in selected]
     for path in untracked:
         file_path = cwd / path
         if not file_path.is_file():
