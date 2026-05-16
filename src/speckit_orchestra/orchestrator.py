@@ -218,17 +218,31 @@ def _run_epic(root, feature: str, config: Config, doc, state, feature_dir, epic:
         if config.logging.preserveDiffs:
             atomic_write_text(attempt_dir / "diff.patch", git.diff_patch(root, changed))
 
-        blocker = _scope_blocker(epic, changed, config)
+        preserved_changed = _preserved_dirty_attempt_changes(root, config, doc.feature.id, feature_dir, epic.id, attempt)
+        completion_changed = sorted(set(changed) | set(preserved_changed))
+
+        blocker = _scope_blocker(epic, completion_changed, config)
         if not blocker and config.validation.blockOnUntrackedFiles:
-            blocker = _untracked_files_blocker(root, changed)
+            blocker = _untracked_files_blocker(root, completion_changed)
         if blocker:
-            _write_attempt_result(config, attempt_dir, epic, attempt, result.status, result.exit_code, changed, "", blocker)
+            _write_attempt_result(config, attempt_dir, epic, attempt, result.status, result.exit_code, completion_changed, "", blocker)
             _mark_blocked_from_result(state, feature_dir, epic.id, blocker)
             return 1
 
-        if not changed and not _allows_no_changes(epic):
-            blocker = _no_changes_blocker(root, feature, attempt_dir, validation_failure, validation_failure_evidence)
-            validation_heading = "Previous Validation Failure" if validation_failure else "Validation"
+        validation_ok, validation_summary = _run_validation(root, config, epic, attempt_dir, options)
+        if not validation_ok:
+            evidence = [relpath(attempt_dir / "validation.log", root)]
+            if not changed:
+                evidence.append(relpath(attempt_dir / "stdout.log", root))
+            message = f"Validation failed for {epic.id} attempt {attempt}."
+            if not changed:
+                message = f"{message} Adapter completed without changing files."
+            blocker = _blocker(
+                "validation_failed",
+                message,
+                _resume_with_preserved_changes_action(feature),
+                evidence,
+            )
             _write_attempt_result(
                 config,
                 attempt_dir,
@@ -236,30 +250,12 @@ def _run_epic(root, feature: str, config: Config, doc, state, feature_dir, epic:
                 attempt,
                 result.status,
                 result.exit_code,
-                changed,
-                validation_failure or "",
+                completion_changed,
+                validation_summary,
                 blocker,
-                validation_heading=validation_heading,
             )
-            if attempt < general_max_attempts:
-                validation_failure = blocker["message"]
-                validation_failure_evidence = list(blocker.get("evidence", []))
-                state["epics"][epic.id]["status"] = "retrying"
-                save_state(feature_dir, state)
-                continue
-            _mark_blocked_from_result(state, feature_dir, epic.id, blocker)
-            return 1
-
-        validation_ok, validation_summary = _run_validation(root, config, epic, attempt_dir, options)
-        if not validation_ok:
-            blocker = _blocker(
-                "validation_failed",
-                f"Validation failed for {epic.id} attempt {attempt}.",
-                _resume_with_preserved_changes_action(feature),
-                [relpath(attempt_dir / "validation.log", root)],
-            )
-            _write_attempt_result(config, attempt_dir, epic, attempt, result.status, result.exit_code, changed, validation_summary, blocker)
-            if attempt < validation_max_attempts:
+            retry_limit = validation_max_attempts if changed else general_max_attempts
+            if attempt < retry_limit:
                 validation_failure = validation_summary
                 validation_failure_evidence = list(blocker.get("evidence", []))
                 state["epics"][epic.id]["status"] = "retrying"
@@ -269,7 +265,19 @@ def _run_epic(root, feature: str, config: Config, doc, state, feature_dir, epic:
             _mark_blocked_from_result(state, feature_dir, epic.id, blocker)
             return 1
 
-        commit = _maybe_commit(root, config, doc.feature.path, epic, changed, validation_summary)
+        if not changed and not completion_changed and not _allows_no_changes(epic):
+            blocker = _no_changes_blocker(root, feature, attempt_dir, validation_failure, validation_failure_evidence)
+            _write_attempt_result(config, attempt_dir, epic, attempt, result.status, result.exit_code, changed, validation_summary, blocker)
+            if attempt < general_max_attempts:
+                validation_failure = blocker["message"]
+                validation_failure_evidence = list(blocker.get("evidence", []))
+                state["epics"][epic.id]["status"] = "retrying"
+                save_state(feature_dir, state)
+                continue
+            _mark_blocked_from_result(state, feature_dir, epic.id, blocker)
+            return 1
+
+        commit = _maybe_commit(root, config, doc.feature.path, epic, completion_changed, validation_summary)
         state["epics"][epic.id]["status"] = "complete"
         state["epics"][epic.id]["completedAt"] = now_iso()
         if commit:
@@ -279,7 +287,7 @@ def _run_epic(root, feature: str, config: Config, doc, state, feature_dir, epic:
         state["currentEpic"] = None
         save_state(feature_dir, state)
         append_event(feature_dir, "epic.completed", epicId=epic.id, attempt=attempt)
-        _write_attempt_result(config, attempt_dir, epic, attempt, result.status, result.exit_code, changed, validation_summary, None)
+        _write_attempt_result(config, attempt_dir, epic, attempt, result.status, result.exit_code, completion_changed, validation_summary, None)
         print(progress_label("Completed", position, total, epic.id, epic.title))
         return 0
 
@@ -433,6 +441,50 @@ def _dirty_paths_for_run_preflight(root, config: Config) -> list[str]:
 def _attempt_changed_files(root, config: Config, feature_id: str, before_snapshot: dict[str, str | None]) -> list[str]:
     after_status = git.status_porcelain(root)
     return _changed_paths_since_snapshot(root, before_snapshot, after_status, config, feature_id)
+
+
+def _preserved_dirty_attempt_changes(
+    root,
+    config: Config,
+    feature_id: str,
+    feature_dir,
+    epic_id: str,
+    current_attempt: int,
+) -> list[str]:
+    previous = _previous_epic_changed_files(feature_dir, epic_id, current_attempt)
+    if not previous:
+        return []
+    dirty = _status_paths(git.status_porcelain(root))
+    return [
+        path
+        for path in previous
+        if path in dirty and not _is_orchestra_runtime_artifact(path, config, feature_id)
+    ]
+
+
+def _previous_epic_changed_files(feature_dir, epic_id: str, current_attempt: int) -> list[str]:
+    runs_dir = feature_dir / "runs" / epic_id
+    if not runs_dir.exists():
+        return []
+    changed: set[str] = set()
+    for path in sorted(runs_dir.glob("attempt-*/changed-files.txt")):
+        attempt = _attempt_number(path.parent.name)
+        if attempt is None or attempt >= current_attempt:
+            continue
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.strip():
+                changed.add(line.strip())
+    return sorted(changed)
+
+
+def _attempt_number(name: str) -> int | None:
+    prefix = "attempt-"
+    if not name.startswith(prefix):
+        return None
+    try:
+        return int(name[len(prefix) :])
+    except ValueError:
+        return None
 
 
 def _changed_paths_since_status(before_status: str, after_status: str, config: Config, feature_id: str) -> list[str]:

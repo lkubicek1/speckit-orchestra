@@ -321,7 +321,7 @@ execution:
   validationRetries: 5
 ```
 
-`maxRetries` controls generic retryable blockers such as no-change attempts. `validationRetries` controls retries after configured validation/test commands fail, which is useful for overnight runs where the agent should keep iterating on failing tests before blocking. If a validation retry makes no changes, it is treated as a no-change blocker and uses the `maxRetries` budget so orchestra does not keep rerunning an agent that has already stopped on a scope or requirements conflict.
+`maxRetries` controls generic retryable blockers such as no-change attempts. `validationRetries` controls retries after configured validation/test commands fail, which is useful for overnight runs where the agent should keep iterating on failing tests before blocking. If a retry makes no new changes but earlier attempts for the same epic left preserved dirty files, orchestra re-runs validation and can complete the epic with those preserved files when validation passes. A no-change retry that still fails validation uses the `maxRetries` budget so orchestra does not keep rerunning an agent that has already stopped on a scope or requirements conflict.
 
 Validation command settings live under `validation`:
 
